@@ -1,0 +1,123 @@
+:root {
+  --primary: #00c853;
+  --warn: #ffd600;
+  --danger: #ff1744;
+}
+
+body { background: #1a1a2e; color: #e0e0e0; }
+#app { max-width: 1000px; margin: 0 auto; min-height: 100vh; display: flex; flex-direction: column; }
+#mainContent { flex: 1; overflow-y: auto; padding-bottom: 60px; }
+.view { display: none; }
+.view.active { display: block; }
+
+/* stat buttons */
+.stat-btn { font-size: 0.85rem; padding: 8px 14px; min-width: 54px; }
+
+/* player list */
+.player-item { cursor: pointer; }
+.player-item.editing { background: rgba(0,200,83,0.15); }
+
+/* checkbox list for player select */
+#playerSelectList .form-check { padding: 6px 8px; border-radius: 6px; }
+#playerSelectList .form-check:hover { background: rgba(255,255,255,0.05); }
+
+/* live stats table */
+.stats-table { font-size: 0.8rem; width: 100%; }
+.stats-table td, .stats-table th { padding: 4px 8px; white-space: nowrap; }
+.stats-table .player-name { font-weight: 600; color: var(--primary); text-align: left; }
+.stats-table .total-row td { border-top: 2px solid var(--primary); font-weight: 700; }
+.val-pos { color: var(--primary); font-weight: 600; }
+.val-neg { color: var(--danger); font-weight: 600; }
+
+/* live player tabs */
+.player-tab { font-size: 0.9rem; padding: 8px 18px; }
+
+/* action log */
+.log-entry { font-size: 0.78rem; padding: 3px 6px; border-radius: 4px; }
+.log-entry:nth-child(odd) { background: rgba(255,255,255,0.03); }
+.log-q { color: var(--warn); font-weight: 700; font-size: 0.7rem; margin-right: 4px; }
+.log-player { color: var(--primary); font-weight: 600; }
+.log-action { color: #aaa; }
+.log-score { color: var(--primary); font-size: 0.7rem; margin-left: 4px; }
+
+/* chat log */
+.chat-log { display: flex; flex-direction: column; gap: 2px; max-height: 500px; overflow-y: auto; font-size: 0.78rem; }
+.chat-row { display: grid; grid-template-columns: 1fr auto 1fr; gap: 8px; align-items: center; padding: 4px 8px; border-radius: 6px; }
+.chat-row.local { background: rgba(0,200,83,0.08); }
+.chat-row.visitor { background: rgba(255,23,68,0.08); }
+.chat-left { text-align: left; }
+.chat-center { text-align: center; font-weight: 600; }
+.chat-right { text-align: right; }
+.chat-q { color: var(--warn); font-weight: 700; font-size: 0.65rem; margin-right: 4px; }
+.chat-score { color: #e0e0e0; font-weight: 600; }
+.chat-player { color: var(--primary); font-weight: 600; }
+.chat-action { color: #aaa; }
+.chat-row.visitor .chat-action { color: var(--danger); font-weight: 600; }
+
+/* history list */
+.game-item { cursor: pointer; }
+.game-item .game-score { font-weight: 700; color: var(--primary); }
+.game-item .game-info { font-size: 0.75rem; color: #888; }
+
+/* home active game alert */
+.home-active { font-size: 0.85rem; }
+.game-score { color: var(--primary); font-weight: 700; }
+
+/* #7 - button flash confirmation */
+@keyframes btnFlashGreen {
+  0% { box-shadow: 0 0 0 0 rgba(0,200,83,0.7); }
+  50% { box-shadow: 0 0 12px 4px rgba(0,200,83,0.5); }
+  100% { box-shadow: 0 0 0 0 rgba(0,200,83,0); }
+}
+@keyframes btnFlashRed {
+  0% { box-shadow: 0 0 0 0 rgba(255,23,68,0.7); }
+  50% { box-shadow: 0 0 12px 4px rgba(255,23,68,0.5); }
+  100% { box-shadow: 0 0 0 0 rgba(255,23,68,0); }
+}
+@keyframes btnFlashOrange {
+  0% { box-shadow: 0 0 0 0 rgba(255,214,0,0.7); }
+  50% { box-shadow: 0 0 12px 4px rgba(255,214,0,0.5); }
+  100% { box-shadow: 0 0 0 0 rgba(255,214,0,0); }
+}
+@keyframes btnFlashInfo {
+  0% { box-shadow: 0 0 0 0 rgba(13,202,240,0.7); }
+  50% { box-shadow: 0 0 12px 4px rgba(13,202,240,0.5); }
+  100% { box-shadow: 0 0 0 0 rgba(13,202,240,0); }
+}
+.btn-flash-green { animation: btnFlashGreen 0.4s ease-out; }
+.btn-flash-red { animation: btnFlashRed 0.4s ease-out; }
+.btn-flash-orange { animation: btnFlashOrange 0.4s ease-out; }
+.btn-flash-info { animation: btnFlashInfo 0.4s ease-out; }
+
+/* #8 - active player tab highlight */
+.player-tab.active {
+  background: var(--primary) !important;
+  color: #000 !important;
+  border-color: var(--primary) !important;
+  font-weight: 700;
+  box-shadow: 0 0 8px rgba(0,200,83,0.4);
+}
+
+/* #10 - undo button prominent */
+#btnUndo {
+  font-size: 0.95rem;
+  padding: 8px 18px;
+  font-weight: 600;
+  border-width: 2px;
+  transition: all 0.2s;
+}
+#btnUndo:not(:disabled) {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+#btnUndo:not(:disabled):hover {
+  background: var(--warn);
+  color: #000;
+}
+
+/* #11 - horizontal scroll on live stats table */
+.stats-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  margin-bottom: 0.5rem;
+}
