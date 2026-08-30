@@ -73,6 +73,142 @@ function updateLiveScore() {
     `<span style="color:${home ? 'var(--primary)' : '#888'}">${team}</span> ${sc} - ${rs} <span style="color:${!home ? 'var(--primary)' : '#888'}">${opp}</span>`;
 }
 
+// POPUP
+function openPopup(title, bodyHtml, footerHtml) {
+  document.getElementById('popupTitle').textContent = title;
+  document.getElementById('popupBody').innerHTML = bodyHtml;
+  document.getElementById('popupFooter').innerHTML = footerHtml || '';
+  document.getElementById('popupOverlay').style.display = 'flex';
+}
+
+function closePopup() {
+  document.getElementById('popupOverlay').style.display = 'none';
+}
+
+function playerLabel(p) {
+  return p ? (p.number && p.number !== '' ? '#' + p.number + ' ' : '') + p.name : '?';
+}
+
+// LINEUP (5 inicial)
+let lineupResolve = null;
+let lineupSelection = [];
+let lineupPlayerIds = [];
+
+function askStartingLineup(playerIds) {
+  return new Promise(resolve => {
+    lineupResolve = resolve;
+    lineupPlayerIds = playerIds;
+    lineupSelection = playerIds.slice(0, 5);
+    renderLineupPicker();
+  });
+}
+
+async function renderLineupPicker() {
+  const players = await DB.getAll('players');
+  const pMap = {};
+  players.forEach(p => pMap[p.id] = p);
+  const body = lineupPlayerIds.map(pid => {
+    const p = pMap[pid];
+    const on = lineupSelection.includes(pid);
+    return `
+      <div class="d-flex align-items-center gap-2 mb-2">
+        <button class="btn ${on ? 'btn-success' : 'btn-outline-secondary'} flex-grow-1" onclick="toggleLineup(${pid})">${esc(playerLabel(p))}</button>
+        <span class="badge ${on ? 'bg-success' : 'bg-secondary'}">${on ? 'PISTA' : 'BANQUETA'}</span>
+      </div>
+    `;
+  }).join('');
+  const footer = `<button class="btn btn-outline-secondary" onclick="cancelLineup()">Cancel·lar</button>
+    <button class="btn btn-primary" onclick="confirmLineup()" ${lineupSelection.length === 5 ? '' : 'disabled'}>Confirmar (${lineupSelection.length}/5)</button>`;
+  openPopup('5 inicial - tria qui surt a pista', body, footer);
+}
+
+function cancelLineup() {
+  closePopup();
+  if (lineupResolve) {
+    const r = lineupResolve;
+    lineupResolve = null;
+    r(null);
+  }
+}
+
+function toggleLineup(pid) {
+  const idx = lineupSelection.indexOf(pid);
+  if (idx >= 0) lineupSelection.splice(idx, 1);
+  else {
+    if (lineupSelection.length >= 5) return;
+    lineupSelection.push(pid);
+  }
+  renderLineupPicker();
+}
+
+function confirmLineup() {
+  if (lineupSelection.length !== 5) return;
+  const result = lineupSelection.slice();
+  closePopup();
+  if (lineupResolve) {
+    const r = lineupResolve;
+    lineupResolve = null;
+    r(result);
+  }
+}
+
+// SUBSTITUCIÓ
+function ensureOnCourt() {
+  if (!activeGame) return [];
+  const court = activeGame.onCourtPlayerIds;
+  if (Array.isArray(court) && court.length > 0) return court;
+  activeGame.onCourtPlayerIds = activeGame.playerIds.slice(0, 5);
+  if (activeGame.id) DB.put('games', activeGame).catch(() => {});
+  return activeGame.onCourtPlayerIds;
+}
+
+function onCourtIds() {
+  return activeGame ? (Array.isArray(activeGame.onCourtPlayerIds) && activeGame.onCourtPlayerIds.length > 0
+    ? activeGame.onCourtPlayerIds : activeGame.playerIds.slice(0, 5)) : [];
+}
+
+async function openSubstitution() {
+  if (!activeGame || !currentPlayerTab || isEditing) return;
+  const outId = currentPlayerTab;
+  const court = onCourtIds();
+  const benchIds = activeGame.playerIds.filter(pid => !court.includes(pid) && pid !== outId);
+  if (benchIds.length === 0) {
+    alert('No hi ha jugadors a la banqueta');
+    return;
+  }
+  const players = await DB.getAll('players');
+  const pMap = {};
+  players.forEach(p => pMap[p.id] = p);
+  const html = '<div class="small text-secondary mb-2">Substituir a ' + esc(playerLabel(pMap[outId])) + '</div>' +
+    benchIds.map(pid => `
+      <button class="btn btn-outline-light w-100 mb-2 d-flex align-items-center justify-content-between" onclick="doSubstitution(${pid})">
+        <span>${esc(playerLabel(pMap[pid]))}</span><span class="badge bg-secondary">BANQUETA</span>
+      </button>
+    `).join('');
+  openPopup('Canvi de jugador', html, '<button class="btn btn-outline-secondary" onclick="closePopup()">Cancel·lar</button>');
+}
+
+async function doSubstitution(inId) {
+  const outId = currentPlayerTab;
+  if (outId === inId || !activeGame) return;
+  const court = ensureOnCourt();
+  const idx = court.indexOf(outId);
+  if (idx >= 0) court.splice(idx, 1);
+  if (!court.includes(inId)) court.push(inId);
+  const ts = totalStats();
+  const sc = calcScore(ts);
+  const rs = calcRivalScore();
+  actionLog.push({
+    type: 'sub', outId, inId,
+    period: activeGame.currentPeriod,
+    teamScore: sc, rivalScore: rs
+  });
+  if (!isEditing) await DB.put('games', activeGame);
+  currentPlayerTab = inId;
+  closePopup();
+  renderLiveGame();
+}
+
 // NAVIGATION
 function navigateTo(viewId) {
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
@@ -262,7 +398,8 @@ async function startGame() {
     team, opponent, periods,
     currentPeriod: 1, playerIds, isActive: true,
     isHome,
-    rival1pt: 0, rival2pt: 0, rival3pt: 0
+    rival1pt: 0, rival2pt: 0, rival3pt: 0,
+    onCourtPlayerIds: null
   };
   const gameId = await DB.add('games', game);
   game.id = gameId;
@@ -276,6 +413,25 @@ async function startGame() {
   for (const pid of playerIds) {
     activePlayerStats[pid] = { gameId, playerId: pid, ...emptyStats() };
   }
+
+  let lineup;
+  if (playerIds.length <= 5) {
+    lineup = playerIds.slice();
+  } else {
+    lineup = await askStartingLineup(playerIds);
+  }
+  if (!lineup) {
+    await DB.delete('games', gameId);
+    activeGame = null;
+    activePlayerStats = {};
+    actionLog = [];
+    navigateTo('viewHome');
+    renderHome();
+    return;
+  }
+  activeGame.onCourtPlayerIds = lineup;
+  await DB.put('games', activeGame);
+  currentPlayerTab = lineup[0] || null;
 
   navigateTo('viewLiveGame');
   renderLiveGame();
@@ -297,20 +453,23 @@ async function renderLiveGame() {
     document.getElementById('livePeriod').textContent = 'Mode Edició';
   }
 
+  const court = ensureOnCourt();
+
   const tabs = document.getElementById('liveTabs');
-  tabs.innerHTML = activeGame.playerIds.map(pid => {
+  tabs.innerHTML = court.map(pid => {
     const p = playerMap[pid];
-    const name = p ? esc(p.name) : '?';
-    const label = p ? (p.number ? '#' + p.number + ' ' : '') + p.name : '?';
+    const label = playerLabel(p);
     return `<button class="btn btn-outline-secondary player-tab" onclick="selectPlayerTab(${pid})">${esc(label)}</button>`;
   }).join('');
 
-  if (currentPlayerTab === null || !activeGame.playerIds.includes(currentPlayerTab)) {
-    currentPlayerTab = activeGame.playerIds[0];
+  if (!court.includes(currentPlayerTab)) {
+    currentPlayerTab = court[0] || null;
   }
-  const tabIdx = activeGame.playerIds.indexOf(currentPlayerTab);
+  const tabIdx = court.indexOf(currentPlayerTab);
   const allTabs = tabs.querySelectorAll('.player-tab');
   if (allTabs[tabIdx]) allTabs[tabIdx].classList.add('active');
+
+  document.getElementById('btnSubstitute').style.display = isEditing ? 'none' : '';
 
   renderLiveStats(playerMap);
   renderActionLog().catch(() => {});
@@ -335,7 +494,7 @@ function selectPlayerTab(pid) {
   currentPlayerTab = pid;
   document.querySelectorAll('.player-tab').forEach(t => t.classList.remove('active'));
   const tabs = document.querySelectorAll('.player-tab');
-  const idx = activeGame.playerIds.indexOf(pid);
+  const idx = onCourtIds().indexOf(pid);
   if (tabs[idx]) tabs[idx].classList.add('active');
 }
 
@@ -442,6 +601,17 @@ async function undoLastAction() {
 
   const last = actionLog.pop();
 
+  if (last.type === 'sub') {
+    const court = ensureOnCourt();
+    const inIdx = court.indexOf(last.inId);
+    if (inIdx >= 0) court.splice(inIdx, 1);
+    if (!court.includes(last.outId)) court.push(last.outId);
+    if (!isEditing) await DB.put('games', activeGame);
+    currentPlayerTab = last.outId;
+    renderLiveGame();
+    return;
+  }
+
   if (last.playerId === -1) {
     const pts = parseInt(last.fields[0]);
     if (pts === 1) activeGame.rival1pt--;
@@ -492,11 +662,23 @@ async function renderActionLog() {
   let html = '';
   for (let i = start; i < actionLog.length; i++) {
     const entry = actionLog[i];
-    const p = pMap[entry.playerId];
-    const label = p ? abbrevName(p) : '#' + entry.playerId;
-    const actionText = entry.text || entry.fields.map(f => STAT_NAMES[f] || f).join(' + ');
     const qStr = entry.period ? `Q${entry.period}` : '';
     const scoreStr = (entry.teamScore !== undefined && entry.rivalScore !== undefined) ? `${entry.teamScore}-${entry.rivalScore}` : '';
+    if (entry.type === 'sub') {
+      const pOut = pMap[entry.outId];
+      const pIn = pMap[entry.inId];
+      const outLabel = pOut ? abbrevName(pOut) : '#' + entry.outId;
+      const inLabel = pIn ? abbrevName(pIn) : '#' + entry.inId;
+      html += `<div class="log-entry">${qStr ? `<span class="log-q">${qStr}</span>` : ''}<span class="log-player">${esc(outLabel)}</span> <span class="log-action">surt</span> &middot; <span class="log-player">${esc(inLabel)}</span> <span class="log-action">entra</span>${scoreStr ? ` <span class="log-score">${scoreStr}</span>` : ''}</div>`;
+      continue;
+    }
+    const p = pMap[entry.playerId];
+    const actionText = entry.text || entry.fields.map(f => STAT_NAMES[f] || f).join(' + ');
+    if (entry.playerId === -1) {
+      html += `<div class="log-entry">${qStr ? `<span class="log-q">${qStr}</span>` : ''}<span class="log-rival">${esc(actionText)}</span>${scoreStr ? ` <span class="log-score">${scoreStr}</span>` : ''}</div>`;
+      continue;
+    }
+    const label = p ? abbrevName(p) : '#' + entry.playerId;
     html += `<div class="log-entry">${qStr ? `<span class="log-q">${qStr}</span>` : ''}<span class="log-player">${esc(label)}</span> <span class="log-action">${esc(actionText)}</span>${scoreStr ? ` <span class="log-score">${scoreStr}</span>` : ''}</div>`;
   }
   container.innerHTML = html || '<div class="log-entry text-secondary">Cap acció encara</div>';
@@ -768,13 +950,26 @@ function renderDetailPlays(game, playerMap, homeSide) {
     const qStr = a.period ? `Q${a.period}` : '?';
     const scoreStr = (a.teamScore !== undefined && a.rivalScore !== undefined) ? `${a.teamScore} - ${a.rivalScore}` : '';
 
+    if (a.type === 'sub') {
+      const pOut = playerMap[a.outId];
+      const pIn = playerMap[a.inId];
+      const outLabel = pOut ? abbrevName(pOut) : '#' + a.outId;
+      const inLabel = pIn ? abbrevName(pIn) : '#' + a.inId;
+      html += `<div class="chat-row local">
+        <div class="chat-left"><span class="chat-player">${esc(outLabel)}</span> <span class="chat-action">surt</span> &middot; <span class="chat-player">${esc(inLabel)}</span> <span class="chat-action">entra</span></div>
+        <div class="chat-center"><span class="chat-q">${qStr}</span> <span class="chat-score">${scoreStr}</span></div>
+        <div class="chat-right"></div>
+      </div>`;
+      return;
+    }
+
     if (a.playerId === -1) {
       // Visitor action
-      const pts = a.fields[0];
+      const pts = a.text || a.fields[0] || '+';
       html += `<div class="chat-row visitor">
         <div class="chat-left"></div>
         <div class="chat-center"><span class="chat-q">${qStr}</span> <span class="chat-score">${scoreStr}</span></div>
-        <div class="chat-right"><span class="chat-action">+${pts}</span></div>
+        <div class="chat-right"><span class="chat-action">${esc(pts)}</span></div>
       </div>`;
     } else {
       // Local action
@@ -1052,13 +1247,14 @@ document.addEventListener('click', e => {
     const dy = e.changedTouches[0].clientY - touchStartY;
     touchStartX = 0;
     if (Math.abs(dx) < threshold || Math.abs(dy) > Math.abs(dx)) return;
-    if (!activeGame || activeGame.playerIds.length < 2) return;
-    const idx = activeGame.playerIds.indexOf(currentPlayerTab);
-    if (dx < 0 && idx < activeGame.playerIds.length - 1) {
-      selectPlayerTab(activeGame.playerIds[idx + 1]);
+    const court = onCourtIds();
+    if (!activeGame || court.length < 2) return;
+    const idx = court.indexOf(currentPlayerTab);
+    if (dx < 0 && idx < court.length - 1) {
+      selectPlayerTab(court[idx + 1]);
       renderLiveStats();
     } else if (dx > 0 && idx > 0) {
-      selectPlayerTab(activeGame.playerIds[idx - 1]);
+      selectPlayerTab(court[idx - 1]);
       renderLiveStats();
     }
   }, { passive: true });
