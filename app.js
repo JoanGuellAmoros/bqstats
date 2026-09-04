@@ -4,6 +4,7 @@ let activePlayerStats = {};
 let actionLog = [];
 let isEditing = false;
 let logVisible = false;
+let statsVisible = true;
 let editingPlayerId = null;
 let statsMode = 'totals';
 let detailQuarterFilter = null;
@@ -23,8 +24,29 @@ const STAT_NAMES = {
 };
 
 const FIELDS = ['twoMade','twoMissed','threeMade','threeMissed','ftMade','ftMissed','oReb','dReb','assists','turnovers','steals','blocks','pFouls','foulsReceived','blocksAgainst'];
+const REST_FIELDS = ['oReb','dReb','turnovers','steals','blocks','blocksAgainst','pFouls','foulsReceived'];
 
 const MADE_AUTO = { twoMade: 'twoMissed', threeMade: 'threeMissed', ftMade: 'ftMissed' };
+
+// TEAMS
+async function migrateTeams() {
+  let teams = await DB.getAll('teams');
+  if (teams.length === 0) {
+    const tid = await DB.add('teams', { name: 'Sense equip' });
+    teams = [{ id: tid, name: 'Sense equip' }];
+  }
+  const defaultId = teams[0].id;
+  const players = await DB.getAll('players');
+  const games = await DB.getAll('games');
+  let changed = false;
+  for (const p of players) {
+    if (!p.teamId) { p.teamId = defaultId; await DB.put('players', p); changed = true; }
+  }
+  for (const g of games) {
+    if (!g.teamId) { g.teamId = defaultId; await DB.put('games', g); changed = true; }
+  }
+  return changed;
+}
 
 function emptyStats() {
   return { twoMade:0, twoMissed:0, threeMade:0, threeMissed:0, ftMade:0, ftMissed:0, oReb:0, dReb:0, assists:0, turnovers:0, steals:0, blocks:0, pFouls:0, foulsReceived:0, blocksAgainst:0 };
@@ -62,6 +84,26 @@ function calcRivalScore() {
   return activeGame.rival1pt + activeGame.rival2pt * 2 + activeGame.rival3pt * 3;
 }
 
+function calcQuarterScore() {
+  const current = activeGame ? activeGame.currentPeriod : 0;
+  let team = 0;
+  let rival = 0;
+  for (const a of actionLog) {
+    if (a.period !== current) continue;
+    if (a.type === 'sub') continue;
+    if (a.playerId === -1) {
+      rival += parseInt(a.fields && a.fields[0]) || 0;
+    } else {
+      (a.fields || []).forEach(f => {
+        if (f === 'twoMade') team += 2;
+        else if (f === 'threeMade') team += 3;
+        else if (f === 'ftMade') team += 1;
+      });
+    }
+  }
+  return { team, rival };
+}
+
 function updateLiveScore() {
   const ts = totalStats();
   const sc = calcScore(ts);
@@ -69,8 +111,10 @@ function updateLiveScore() {
   const home = activeGame && activeGame.isHome !== false;
   const team = activeGame ? esc(activeGame.team) : '';
   const opp = activeGame ? esc(activeGame.opponent) : '';
+  const q = calcQuarterScore();
   document.getElementById('liveScore').innerHTML =
-    `<span style="color:${home ? 'var(--primary)' : '#888'}">${team}</span> ${sc} - ${rs} <span style="color:${!home ? 'var(--primary)' : '#888'}">${opp}</span>`;
+    `<span style="color:${home ? 'var(--primary)' : '#888'}">${team}</span> ${sc} - ${rs} <span style="color:${!home ? 'var(--primary)' : '#888'}">${opp}</span>` +
+    ` <span class="small text-secondary">(${q.team}-${q.rival})</span>`;
 }
 
 // POPUP
@@ -218,6 +262,7 @@ function navigateTo(viewId) {
   const titles = {
     viewHome: 'Bàsquet Stats',
     viewPlayers: 'Jugadors',
+    viewTeams: 'Equips',
     viewNewGame: 'Nou Partit',
     viewLiveGame: activeGame && isEditing ? 'Editar Partit' : 'Partit en Viu',
     viewHistory: 'Historial',
@@ -230,6 +275,7 @@ function navigateTo(viewId) {
   switch (viewId) {
     case 'viewHome': renderHome(); break;
     case 'viewPlayers': renderPlayers(); break;
+    case 'viewTeams': renderTeams(); break;
     case 'viewNewGame': renderNewGame(); break;
     case 'viewHistory': renderHistory(); break;
     case 'viewStats': renderGlobalStats(); break;
@@ -241,6 +287,7 @@ function navigateBack() {
   if (!active) return;
   switch (active.id) {
     case 'viewGameDetail': navigateTo('viewHistory'); break;
+    case 'viewTeams': navigateTo('viewHome'); break;
     case 'viewLiveGame': navigateTo('viewHome'); break;
     default: navigateTo('viewHome');
   }
@@ -304,33 +351,49 @@ async function renderHome() {
 async function renderPlayers() {
   const list = document.getElementById('playerList');
   const players = await DB.getAll('players');
+  const teams = await DB.getAll('teams');
+  const teamMap = {};
+  teams.forEach(t => teamMap[t.id] = t);
+  const teamSel = document.getElementById('playerTeam');
+  if (teamSel) {
+    teamSel.innerHTML = teams.map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join('') ||
+      `<option value="">Sense equip</option>`;
+  }
   if (players.length === 0) {
-    list.innerHTML = '<div class="text-center text-secondary py-4">&#127936;<br>Afegeix jugadors per començar</div>';
+    list.innerHTML = '<div class="text-center text-secondary py-4">&#128101;<br>Cap jugador encara</div>';
     return;
   }
-  list.innerHTML = players.map(p => `
+  const sorted = players.slice().sort((a, b) => (teamMap[a.teamId] ? teamMap[a.teamId].name : '').localeCompare(teamMap[b.teamId] ? teamMap[b.teamId].name : '') || a.name.localeCompare(b.name));
+  list.innerHTML = sorted.map(p => {
+    const team = teamMap[p.teamId];
+    return `
     <li class="list-group-item list-group-item-action d-flex align-items-center justify-content-between px-2 py-2 player-item ${editingPlayerId === p.id ? 'editing' : ''}">
-      <span>${p.number ? '<span class="text-primary fw-bold">#' + p.number + '</span> ' : ''}${esc(p.name)}</span>
+      <div class="d-flex flex-column">
+        <span>${p.number ? '<span class="text-primary fw-bold">#' + p.number + '</span> ' : ''}${esc(p.name)}</span>
+        <small class="${team ? 'text-secondary' : 'text-secondary'}" style="${team ? 'color:var(--primary)!important' : ''}">${team ? esc(team.name) : 'Sense equip'}</small>
+      </div>
       <div class="btn-group btn-group-sm">
         <button class="btn btn-outline-primary" onclick="editPlayer(${p.id})">&#9998;</button>
         <button class="btn btn-outline-danger" onclick="deletePlayer(${p.id})">&#128465;</button>
       </div>
     </li>
-  `).join('');
+  `;
+  }).join('');
 }
 
 async function addPlayer() {
   const name = document.getElementById('playerName').value.trim();
   const number = document.getElementById('playerNumber').value.trim();
+  const teamId = parseInt(document.getElementById('playerTeam').value) || null;
   if (!name) return alert('Introdueix un nom');
 
   if (editingPlayerId) {
-    await DB.put('players', { id: editingPlayerId, name, number: number || '' });
+    await DB.put('players', { id: editingPlayerId, name, number: number || '', teamId });
     editingPlayerId = null;
     document.getElementById('btnPlayerSave').textContent = 'Afegir';
     document.getElementById('btnPlayerCancel').style.display = 'none';
   } else {
-    await DB.add('players', { name, number: number || '' });
+    await DB.add('players', { name, number: number || '', teamId });
   }
 
   document.getElementById('playerName').value = '';
@@ -345,6 +408,11 @@ function editPlayer(id) {
     if (p) {
       document.getElementById('playerName').value = p.name;
       document.getElementById('playerNumber').value = p.number || '';
+      const teamSel = document.getElementById('playerTeam');
+      if (teamSel) {
+        const hasTeam = teamSel.options && Array.from(teamSel.options).some(o => o.value === String(p.teamId));
+        teamSel.value = hasTeam ? String(p.teamId) : '';
+      }
       document.getElementById('btnPlayerSave').textContent = 'Actualitzar';
       document.getElementById('btnPlayerCancel').style.display = '';
     }
@@ -366,15 +434,103 @@ async function deletePlayer(id) {
   renderPlayers();
 }
 
+// TEAMS CRUD
+async function renderTeams() {
+  const teams = await DB.getAll('teams');
+  const players = await DB.getAll('players');
+  const games = await DB.getAll('games');
+  const list = document.getElementById('teamList');
+  if (teams.length === 0) {
+    list.innerHTML = '<div class="text-center text-secondary py-4">No hi ha equips. Crea&#39;n un!</div>';
+    return;
+  }
+  list.innerHTML = teams.map(t => {
+    const pCount = players.filter(p => p.teamId === t.id).length;
+    const gCount = games.filter(g => g.teamId === t.id).length;
+    return `
+      <li class="list-group-item list-group-item-action d-flex flex-wrap align-items-center justify-content-between gap-2 px-2 py-2">
+        <span>${esc(t.name)}</span>
+        <div class="d-flex align-items-center gap-2 flex-wrap">
+          <small class="text-secondary">${pCount} jug &middot; ${gCount} partits</small>
+          <div class="btn-group btn-group-sm">
+            <button class="btn btn-outline-primary" onclick="renameTeam(${t.id})">&#9998;</button>
+            <button class="btn btn-outline-danger" onclick="deleteTeam(${t.id})">&#128465;</button>
+          </div>
+        </div>
+      </li>
+    `;
+  }).join('');
+}
+
+async function addTeam() {
+  const name = document.getElementById('teamName').value.trim();
+  if (!name) return alert('Introdueix un nom');
+  const id = await DB.add('teams', { name });
+  document.getElementById('teamName').value = '';
+  renderTeams();
+  renderHome();
+}
+
+async function renameTeam(id) {
+  const t = await DB.get('teams', id);
+  if (!t) return;
+  const name = prompt('Nou nom de l\'equip:', t.name);
+  if (!name || !name.trim()) return;
+  t.name = name.trim();
+  await DB.put('teams', t);
+  renderTeams();
+}
+
+async function deleteTeam(id) {
+  const players = await DB.getAll('players');
+  const games = await DB.getAll('games');
+  if (players.some(p => p.teamId === id)) {
+    return alert('No es pot eliminar: mou primer els jugadors a un altre equip.');
+  }
+  const teamGames = games.filter(g => g.teamId === id);
+  if (teamGames.length > 0) {
+    if (!confirm(`L'equip té ${teamGames.length} partits. Quedaran sense equip. Continuar?`)) return;
+    for (const g of teamGames) {
+      delete g.teamId;
+      await DB.put('games', g);
+    }
+  }
+  if (!confirm('Eliminar equip?')) return;
+  await DB.delete('teams', id);
+  renderTeams();
+  renderHome();
+}
+
 // NEW GAME
 async function renderNewGame() {
   const players = await DB.getAll('players');
+  const teams = await DB.getAll('teams');
+  const sel = document.getElementById('gameTeamSelect');
+  sel.innerHTML = teams.map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join('');
+  const selected = parseInt(sel.value);
+  const team = teams.find(t => t.id === selected);
+  if (team) document.getElementById('gameTeam').value = team.name;
+  renderGamePlayers(selected, players);
+}
+
+async function onGameTeamChange() {
+  const players = await DB.getAll('players');
+  const teams = await DB.getAll('teams');
+  const sel = document.getElementById('gameTeamSelect');
+  const selected = parseInt(sel.value);
+  const team = teams.find(t => t.id === selected);
+  if (team) document.getElementById('gameTeam').value = team.name;
+  renderGamePlayers(selected, players);
+}
+
+function renderGamePlayers(teamId, players) {
   const container = document.getElementById('playerSelectList');
-  if (players.length === 0) {
-    container.innerHTML = '<div class="text-center text-secondary py-4">&#128101;<br>Primer afegeix jugadors</div>';
+  const teamPlayers = players.filter(p => p.teamId === teamId);
+  if (teamPlayers.length === 0) {
+    container.innerHTML = '<div class="text-center text-secondary py-4">&#128101;<br>Primer afegeix jugadors a aquest equip</div>';
     return;
   }
-  container.innerHTML = players.map(p => `
+  container.innerHTML = teamPlayers.map(p => `
     <div class="form-check">
       <input class="form-check-input" type="checkbox" value="${p.id}" id="psel${p.id}" checked>
       <label class="form-check-label" for="psel${p.id}">${p.number ? '#' + p.number + ' ' : ''}${esc(p.name)}</label>
@@ -393,11 +549,13 @@ async function startGame() {
   if (playerIds.length === 0) return alert('Selecciona almenys un jugador');
 
   const isHome = document.querySelector('input[name="gameSide"]:checked').value === 'local';
+  const teamSelect = document.getElementById('gameTeamSelect');
+  const teamId = teamSelect ? (parseInt(teamSelect.value) || null) : null;
   const game = {
     date: new Date().toISOString(),
     team, opponent, periods,
     currentPeriod: 1, playerIds, isActive: true,
-    isHome,
+    isHome, teamId,
     rival1pt: 0, rival2pt: 0, rival3pt: 0,
     onCourtPlayerIds: null
   };
@@ -508,26 +666,51 @@ async function renderLiveStats(playerMap) {
   const container = document.getElementById('liveStats');
 
   let html = '<table class="table table-dark table-striped table-sm stats-table"><thead><tr><th>Jug</th>';
+  html += '<th>PTS</th><th>REB</th><th>AST</th>';
   html += '<th>2PM</th><th>2PI</th><th>2P%</th>';
   html += '<th>3PM</th><th>3PI</th><th>3P%</th>';
   html += '<th>TLM</th><th>TLI</th><th>TL%</th>';
-  FIELDS.slice(6).forEach(f => html += `<th>${STAT_LABELS[f]}</th>`);
-  html += '<th>PTS</th><th>VAL</th></tr></thead><tbody>';
+  REST_FIELDS.forEach(f => html += `<th>${STAT_LABELS[f]}</th>`);
+  html += '<th>VAL</th></tr></thead><tbody>';
 
   const totalRow = emptyStats();
-  const sorted = activeGame.playerIds.map(pid => activePlayerStats[pid]).filter(Boolean);
+  const court = onCourtIds();
+  const numOf = pid => {
+    const p = playerMap[pid];
+    const n = p && p.number !== '' && p.number != null ? parseInt(p.number) : null;
+    return n;
+  };
+  const sorted = activeGame.playerIds.map(pid => activePlayerStats[pid]).filter(Boolean)
+    .sort((a, b) => {
+      const aOn = court.includes(a.playerId) ? 0 : 1;
+      const bOn = court.includes(b.playerId) ? 0 : 1;
+      if (aOn !== bOn) return aOn - bOn;
+      const an = numOf(a.playerId);
+      const bn = numOf(b.playerId);
+      if (an === null && bn === null) return 0;
+      if (an === null) return 1;
+      if (bn === null) return -1;
+      return an - bn;
+    });
+  let benchStarted = false;
   sorted.forEach(s => {
+    const on = court.includes(s.playerId);
+    if (!on && !benchStarted) benchStarted = true;
+    const rowClass = benchStarted && !on ? ' bench-sep' : '';
     const p = playerMap[s.playerId];
     const name = p ? abbrevName(p) : '?';
     const pts = calcScore(s);
     const val = calcVal(s);
-    html += `<tr><td class="player-name">${esc(name)}</td>`;
+    const reb = s.oReb + s.dReb;
+    html += `<tr class="${rowClass.trim()}"><td class="player-name">${esc(name)}</td>`;
+    html += `<td>${pts}</td><td>${reb}</td><td>${s.assists}</td>`;
     html += `<td>${s.twoMade}</td><td>${s.twoMissed}</td><td>${pct(s.twoMade, s.twoMissed)}</td>`;
     html += `<td>${s.threeMade}</td><td>${s.threeMissed}</td><td>${pct(s.threeMade, s.threeMissed)}</td>`;
     html += `<td>${s.ftMade}</td><td>${s.ftMissed}</td><td>${pct(s.ftMade, s.ftMissed)}</td>`;
-    FIELDS.slice(6).forEach(f => html += `<td>${s[f]}</td>`);
-    html += `<td>${pts}</td><td class="${val >= 0 ? 'val-pos' : 'val-neg'}">${val}</td></tr>`;
-    FIELDS.slice(6).forEach(f => totalRow[f] += s[f]);
+    REST_FIELDS.forEach(f => html += `<td>${s[f]}</td>`);
+    html += `<td class="${val >= 0 ? 'val-pos' : 'val-neg'}">${val}</td></tr>`;
+    REST_FIELDS.forEach(f => totalRow[f] += s[f]);
+    totalRow.assists += s.assists;
     totalRow.twoMade += s.twoMade; totalRow.twoMissed += s.twoMissed;
     totalRow.threeMade += s.threeMade; totalRow.threeMissed += s.threeMissed;
     totalRow.ftMade += s.ftMade; totalRow.ftMissed += s.ftMissed;
@@ -535,12 +718,14 @@ async function renderLiveStats(playerMap) {
 
   const totalPts = calcScore(totalRow);
   const totalVal = calcVal(totalRow);
+  const totalReb = totalRow.oReb + totalRow.dReb;
   html += `<tr class="total-row"><td class="player-name">TOTAL</td>`;
+  html += `<td>${totalPts}</td><td>${totalReb}</td><td>${totalRow.assists}</td>`;
   html += `<td>${totalRow.twoMade}</td><td>${totalRow.twoMissed}</td><td>${pct(totalRow.twoMade, totalRow.twoMissed)}</td>`;
   html += `<td>${totalRow.threeMade}</td><td>${totalRow.threeMissed}</td><td>${pct(totalRow.threeMade, totalRow.threeMissed)}</td>`;
   html += `<td>${totalRow.ftMade}</td><td>${totalRow.ftMissed}</td><td>${pct(totalRow.ftMade, totalRow.ftMissed)}</td>`;
-  FIELDS.slice(6).forEach(f => html += `<td>${totalRow[f]}</td>`);
-  html += `<td>${totalPts}</td><td class="${totalVal >= 0 ? 'val-pos' : 'val-neg'}">${totalVal}</td></tr>`;
+  REST_FIELDS.forEach(f => html += `<td>${totalRow[f]}</td>`);
+  html += `<td class="${totalVal >= 0 ? 'val-pos' : 'val-neg'}">${totalVal}</td></tr>`;
 
   html += '</tbody></table>';
   container.innerHTML = html;
@@ -648,7 +833,13 @@ function toggleActionLog() {
   logVisible = !logVisible;
   const el = document.getElementById('liveActionLog');
   el.style.display = logVisible ? 'block' : 'none';
-  document.getElementById('btnToggleLog').innerHTML = logVisible ? '&#128172; Amagar' : '&#128172; Jugada';
+}
+
+function toggleStats() {
+  statsVisible = !statsVisible;
+  const el = document.getElementById('liveStats');
+  el.style.display = statsVisible ? 'block' : 'none';
+  document.getElementById('btnToggleStats').innerHTML = statsVisible ? '&#128200; Amagar' : '&#128200; Mostrar';
 }
 
 async function renderActionLog() {
@@ -705,6 +896,7 @@ async function nextPeriod() {
     activeGame.currentPeriod++;
     if (!isEditing) await DB.put('games', activeGame);
     document.getElementById('livePeriod').textContent = `Quart ${activeGame.currentPeriod}/${activeGame.periods}`;
+    updateLiveScore();
   }
 }
 
@@ -714,6 +906,7 @@ async function prevPeriod() {
   activeGame.currentPeriod--;
   if (!isEditing) await DB.put('games', activeGame);
   document.getElementById('livePeriod').textContent = `Quart ${activeGame.currentPeriod}/${activeGame.periods}`;
+  updateLiveScore();
 }
 
 async function resumeGame(gameId) {
@@ -873,12 +1066,14 @@ async function viewGameDetail(gameId) {
   `;
 
   // Stats table
+  const detailRestFields = REST_FIELDS;
   let html = '<table class="table table-dark table-striped table-sm stats-table"><thead><tr><th>Jug</th>';
+  html += '<th>PTS</th><th>REB</th><th>AST</th>';
   html += '<th>2PM</th><th>2PI</th><th>2P%</th>';
   html += '<th>3PM</th><th>3PI</th><th>3P%</th>';
   html += '<th>TLM</th><th>TLI</th><th>TL%</th>';
-  FIELDS.slice(6).forEach(f => html += `<th>${STAT_LABELS[f]}</th>`);
-  html += '<th>PTS</th><th>VAL</th></tr></thead><tbody>';
+  detailRestFields.forEach(f => html += `<th>${STAT_LABELS[f]}</th>`);
+  html += '<th>VAL</th></tr></thead><tbody>';
 
   const totalRow = emptyStats();
   const sorted = game.playerIds.map(pid => statsByPlayer[pid]).filter(Boolean);
@@ -887,13 +1082,16 @@ async function viewGameDetail(gameId) {
     const name = p ? abbrevName(p) : '?';
     const pts = calcScore(s);
     const val = calcVal(s);
+    const reb = s.oReb + s.dReb;
     html += `<tr><td class="player-name">${esc(name)}</td>`;
+    html += `<td>${pts}</td><td>${reb}</td><td>${s.assists}</td>`;
     html += `<td>${s.twoMade}</td><td>${s.twoMissed}</td><td>${pct(s.twoMade, s.twoMissed)}</td>`;
     html += `<td>${s.threeMade}</td><td>${s.threeMissed}</td><td>${pct(s.threeMade, s.threeMissed)}</td>`;
     html += `<td>${s.ftMade}</td><td>${s.ftMissed}</td><td>${pct(s.ftMade, s.ftMissed)}</td>`;
-    FIELDS.slice(6).forEach(f => html += `<td>${s[f]}</td>`);
-    html += `<td>${pts}</td><td>${val}</td></tr>`;
-    FIELDS.slice(6).forEach(f => totalRow[f] += s[f]);
+    detailRestFields.forEach(f => html += `<td>${s[f]}</td>`);
+    html += `<td>${val}</td></tr>`;
+    detailRestFields.forEach(f => totalRow[f] += s[f]);
+    totalRow.assists += s.assists;
     totalRow.twoMade += s.twoMade; totalRow.twoMissed += s.twoMissed;
     totalRow.threeMade += s.threeMade; totalRow.threeMissed += s.threeMissed;
     totalRow.ftMade += s.ftMade; totalRow.ftMissed += s.ftMissed;
@@ -901,12 +1099,14 @@ async function viewGameDetail(gameId) {
 
   const totalPts = calcScore(totalRow);
   const totalVal = calcVal(totalRow);
+  const totalReb = totalRow.oReb + totalRow.dReb;
   html += `<tr style="font-weight:700;border-top:2px solid var(--primary)"><td>TOTAL</td>`;
+  html += `<td>${totalPts}</td><td>${totalReb}</td><td>${totalRow.assists}</td>`;
   html += `<td>${totalRow.twoMade}</td><td>${totalRow.twoMissed}</td><td>${pct(totalRow.twoMade, totalRow.twoMissed)}</td>`;
   html += `<td>${totalRow.threeMade}</td><td>${totalRow.threeMissed}</td><td>${pct(totalRow.threeMade, totalRow.threeMissed)}</td>`;
   html += `<td>${totalRow.ftMade}</td><td>${totalRow.ftMissed}</td><td>${pct(totalRow.ftMade, totalRow.ftMissed)}</td>`;
-  FIELDS.slice(6).forEach(f => html += `<td>${totalRow[f]}</td>`);
-  html += `<td>${totalPts}</td><td>${totalVal}</td></tr>`;
+  detailRestFields.forEach(f => html += `<td>${totalRow[f]}</td>`);
+  html += `<td>${totalVal}</td></tr>`;
 
   html += '</tbody></table>';
   document.getElementById('detailStats').innerHTML = html;
@@ -1068,12 +1268,15 @@ async function renderGlobalStats() {
   const container = document.getElementById('globalStats');
   const allStats = await DB.getAll('stats');
   const allGames = await DB.getAll('games');
-  const finishedIds = new Set(allGames.filter(g => !g.isActive).map(g => g.id));
+  const teamFinishedIds = new Set(allGames.filter(g => !g.isActive).map(g => g.id));
   const players = await DB.getAll('players');
   const playerMap = {};
   players.forEach(p => playerMap[p.id] = p);
+  const teams = await DB.getAll('teams');
+  const teamMap = {};
+  teams.forEach(t => teamMap[t.id] = t);
 
-  const stats = allStats.filter(s => finishedIds.has(s.gameId));
+  const stats = allStats.filter(s => teamFinishedIds.has(s.gameId));
   if (stats.length === 0) {
     container.innerHTML = '<div class="text-center text-secondary py-4">&#128200;<br>No hi ha dades encara</div>';
     return;
@@ -1092,48 +1295,55 @@ async function renderGlobalStats() {
 
   if (statsMode === 'totals') {
     let html = '<table class="table table-dark table-striped table-sm stats-table"><thead><tr><th>Jug</th><th>PJ</th>';
+    html += '<th>PTS</th><th>REB</th><th>AST</th>';
     html += '<th>2PM</th><th>2PI</th><th>2P%</th>';
     html += '<th>3PM</th><th>3PI</th><th>3P%</th>';
     html += '<th>TLM</th><th>TLI</th><th>TL%</th>';
-    FIELDS.slice(6).forEach(f => html += `<th>${STAT_LABELS[f]}</th>`);
-    html += '<th>PTS</th><th>VAL</th></tr></thead><tbody>';
+    REST_FIELDS.forEach(f => html += `<th>${STAT_LABELS[f]}</th>`);
+    html += '<th>VAL</th></tr></thead><tbody>';
 
     Object.keys(totals).forEach(pid => {
       const t = totals[pid];
       const p = playerMap[parseInt(pid)];
       const name = p ? abbrevName(p) : '?';
+      const team = p ? teamMap[p.teamId] : null;
       const pts = calcScore(t);
       const val = calcVal(t);
-      html += `<tr><td class="player-name">${esc(name)}</td><td>${gamesCount[pid]}</td>`;
+      const reb = t.oReb + t.dReb;
+      html += `<tr><td class="player-name">${esc(name)}${team ? `<br><small style="color:var(--primary)">${esc(team.name)}</small>` : ''}</td><td>${gamesCount[pid]}</td>`;
+      html += `<td>${pts}</td><td>${reb}</td><td>${t.assists}</td>`;
       html += `<td>${t.twoMade}</td><td>${t.twoMissed}</td><td>${pct(t.twoMade, t.twoMissed)}</td>`;
       html += `<td>${t.threeMade}</td><td>${t.threeMissed}</td><td>${pct(t.threeMade, t.threeMissed)}</td>`;
       html += `<td>${t.ftMade}</td><td>${t.ftMissed}</td><td>${pct(t.ftMade, t.ftMissed)}</td>`;
-      FIELDS.slice(6).forEach(f => html += `<td>${t[f]}</td>`);
-      html += `<td>${pts}</td><td>${val}</td></tr>`;
+      REST_FIELDS.forEach(f => html += `<td>${t[f]}</td>`);
+      html += `<td>${val}</td></tr>`;
     });
 
     html += '</tbody></table>';
     container.innerHTML = html;
   } else {
     let html = '<table class="table table-dark table-striped table-sm stats-table"><thead><tr><th>Jug</th><th>PJ</th>';
+    html += '<th>REB</th><th>AST</th>';
     html += '<th>2PM</th><th>2PI</th><th>2P%</th>';
     html += '<th>3PM</th><th>3PI</th><th>3P%</th>';
     html += '<th>TLM</th><th>TLI</th><th>TL%</th>';
-    FIELDS.slice(6).forEach(f => html += `<th>${STAT_LABELS[f]}</th>`);
+    REST_FIELDS.forEach(f => html += `<th>${STAT_LABELS[f]}</th>`);
     html += '<th>PPT</th><th>VPP</th></tr></thead><tbody>';
 
     Object.keys(totals).forEach(pid => {
       const t = totals[pid];
       const p = playerMap[parseInt(pid)];
       const name = p ? abbrevName(p) : '?';
+      const team = p ? teamMap[p.teamId] : null;
       const n = gamesCount[pid];
       const pts = calcScore(t);
       const val = calcVal(t);
-      html += `<tr><td>${esc(name)}</td><td>${n}</td>`;
+      html += `<tr><td>${esc(name)}${team ? `<br><small style="color:var(--primary)">${esc(team.name)}</small>` : ''}</td><td>${n}</td>`;
+      html += `<td>${((t.oReb + t.dReb) / n).toFixed(1)}</td><td>${(t.assists / n).toFixed(1)}</td>`;
       html += `<td>${(t.twoMade / n).toFixed(1)}</td><td>${(t.twoMissed / n).toFixed(1)}</td><td>${pct(t.twoMade, t.twoMissed)}</td>`;
       html += `<td>${(t.threeMade / n).toFixed(1)}</td><td>${(t.threeMissed / n).toFixed(1)}</td><td>${pct(t.threeMade, t.threeMissed)}</td>`;
       html += `<td>${(t.ftMade / n).toFixed(1)}</td><td>${(t.ftMissed / n).toFixed(1)}</td><td>${pct(t.ftMade, t.ftMissed)}</td>`;
-      FIELDS.slice(6).forEach(f => html += `<td>${(t[f] / n).toFixed(1)}</td>`);
+      REST_FIELDS.forEach(f => html += `<td>${(t[f] / n).toFixed(1)}</td>`);
       html += `<td>${(pts / n).toFixed(1)}</td>`;
       html += `<td>${(val / n).toFixed(1)}</td></tr>`;
     });
@@ -1148,7 +1358,8 @@ async function exportData() {
   const players = await DB.getAll('players');
   const games = await DB.getAll('games');
   const stats = await DB.getAll('stats');
-  const data = { players, games, stats, exportedAt: new Date().toISOString() };
+  const teams = await DB.getAll('teams');
+  const data = { players, games, stats, teams, exportedAt: new Date().toISOString() };
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -1184,8 +1395,15 @@ async function handleImport(event) {
       const { id, ...rest } = s;
       await DB.add('stats', rest);
     }
+    if (Array.isArray(data.teams)) {
+      for (const t of data.teams) {
+        const { id, ...rest } = t;
+        await DB.add('teams', rest);
+      }
+    }
+    await migrateTeams();
     alert('Dades importades correctament!');
-    renderGlobalStats();
+    navigateTo('viewHome');
   } catch (e) {
     alert('Error: ' + e.message);
   }
@@ -1212,6 +1430,7 @@ function flashButton(el) {
 
 // INIT - don't auto-load any game; show all active on home
 (async function init() {
+  await migrateTeams();
   renderHome();
 })();
 

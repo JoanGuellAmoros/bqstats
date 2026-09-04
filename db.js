@@ -1,5 +1,5 @@
 const DB_NAME = 'BasquetStatsDB';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 function openDB() {
   return new Promise((resolve, reject) => {
@@ -18,6 +18,10 @@ function openDB() {
         const store = db.createObjectStore('stats', { keyPath: 'id', autoIncrement: true });
         store.createIndex('gameId', 'gameId', { unique: false });
         store.createIndex('playerId', 'playerId', { unique: false });
+      }
+      if (!db.objectStoreNames.contains('teams')) {
+        const store = db.createObjectStore('teams', { keyPath: 'id', autoIncrement: true });
+        store.createIndex('name', 'name', { unique: false });
       }
     };
     req.onsuccess = () => resolve(req.result);
