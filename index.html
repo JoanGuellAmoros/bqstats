@@ -33,12 +33,17 @@
 
       <!-- PLAYERS -->
       <section id="viewPlayers" class="view">
-        <div class="input-group mb-2">
+        <div class="input-group mb-1">
           <input type="text" id="playerName" class="form-control" placeholder="Nom del jugador">
           <input type="number" id="playerNumber" class="form-control" placeholder="Num." min="0" max="99" style="max-width:70px">
-          <select id="playerTeam" class="form-select" style="max-width:130px"></select>
+          <select id="playerTeam" class="form-select" style="max-width:120px"></select>
           <button class="btn btn-primary" id="btnPlayerSave" onclick="addPlayer()">Afegir</button>
-          <button class="btn btn-secondary" id="btnPlayerCancel" onclick="cancelEditPlayer()" style="display:none">Cancel·lar</button>
+        </div>
+        <div class="d-flex gap-2 align-items-center mb-2" id="bulkBar" style="display:none">
+          <span id="bulkCount" class="small text-secondary text-nowrap">0 seleccionats</span>
+          <select id="bulkTeamSelect" class="form-select form-select-sm flex-grow-1"></select>
+          <button class="btn btn-sm btn-primary text-nowrap" onclick="applyBulkTeam()">Canviar equip</button>
+          <button class="btn btn-sm btn-outline-secondary" onclick="clearPlayersSelection()" title="Cancel·lar selecció">&#10005;</button>
         </div>
         <ul id="playerList" class="list-group list-group-flush"></ul>
       </section>
@@ -192,7 +197,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
   <script src="db.js"></script>
-  <script src="app.js?v=16"></script>
+  <script src="app.js?v=17"></script>
   <script>
     try {
       if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {

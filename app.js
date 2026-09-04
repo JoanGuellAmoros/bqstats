@@ -348,6 +348,8 @@ async function renderHome() {
 }
 
 // PLAYERS
+let playerSelection = new Set();
+
 async function renderPlayers() {
   const list = document.getElementById('playerList');
   const players = await DB.getAll('players');
@@ -359,26 +361,90 @@ async function renderPlayers() {
     teamSel.innerHTML = teams.map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join('') ||
       `<option value="">Sense equip</option>`;
   }
+  const bulkSel = document.getElementById('bulkTeamSelect');
+  if (bulkSel) {
+    bulkSel.innerHTML = `<option value="">Sense equip</option>` +
+      teams.map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join('');
+  }
   if (players.length === 0) {
     list.innerHTML = '<div class="text-center text-secondary py-4">&#128101;<br>Cap jugador encara</div>';
+    playerSelection = new Set();
+    updatePlayersSel();
     return;
   }
   const sorted = players.slice().sort((a, b) => (teamMap[a.teamId] ? teamMap[a.teamId].name : '').localeCompare(teamMap[b.teamId] ? teamMap[b.teamId].name : '') || a.name.localeCompare(b.name));
   list.innerHTML = sorted.map(p => {
     const team = teamMap[p.teamId];
+    if (editingPlayerId === p.id) {
+      const teamOpts = `<option value="">Sense equip</option>` + teams.map(t =>
+        `<option value="${t.id}" ${p.teamId === t.id ? 'selected' : ''}>${esc(t.name)}</option>`).join('');
+      return `
+      <li class="list-group-item d-flex flex-wrap align-items-center gap-2 px-2 py-2 player-item editing">
+        <input type="text" id="inlineName" class="form-control form-control-sm" style="flex:2;min-width:110px" value="${esc(p.name)}" placeholder="Nom">
+        <input type="number" id="inlineNumber" class="form-control form-control-sm" style="flex:0 0 70px" value="${esc(p.number || '')}" min="0" max="99" placeholder="Num.">
+        <select id="inlineTeam" class="form-select form-select-sm" style="flex:1;min-width:100px">${teamOpts}</select>
+        <div class="btn-group btn-group-sm ms-auto">
+          <button class="btn btn-success" onclick="saveInlinePlayer(${p.id})">&#10003;</button>
+          <button class="btn btn-outline-secondary" onclick="cancelEditPlayer()">&#10005;</button>
+        </div>
+      </li>`;
+    }
+    const checked = playerSelection.has(p.id) ? ' checked' : '';
     return `
-    <li class="list-group-item list-group-item-action d-flex align-items-center justify-content-between px-2 py-2 player-item ${editingPlayerId === p.id ? 'editing' : ''}">
-      <div class="d-flex flex-column">
+    <li class="list-group-item d-flex align-items-center gap-2 px-2 py-2 player-item">
+      <input type="checkbox" class="player-check" value="${p.id}" onchange="togglePlayerSelection(${p.id})"${checked}>
+      <div class="d-flex flex-column flex-grow-1">
         <span>${p.number ? '<span class="text-primary fw-bold">#' + p.number + '</span> ' : ''}${esc(p.name)}</span>
-        <small class="${team ? 'text-secondary' : 'text-secondary'}" style="${team ? 'color:var(--primary)!important' : ''}">${team ? esc(team.name) : 'Sense equip'}</small>
+        <small class="text-secondary" style="${team ? 'color:var(--primary)!important' : ''}">${team ? esc(team.name) : 'Sense equip'}</small>
       </div>
       <div class="btn-group btn-group-sm">
         <button class="btn btn-outline-primary" onclick="editPlayer(${p.id})">&#9998;</button>
         <button class="btn btn-outline-danger" onclick="deletePlayer(${p.id})">&#128465;</button>
       </div>
-    </li>
-  `;
+    </li>`;
   }).join('');
+  updatePlayersSel();
+}
+
+function togglePlayerSelection(id) {
+  if (playerSelection.has(id)) playerSelection.delete(id);
+  else playerSelection.add(id);
+  updatePlayersSel();
+}
+
+function updatePlayersSel() {
+  const bar = document.getElementById('bulkBar');
+  const count = document.getElementById('bulkCount');
+  if (bar) bar.style.display = playerSelection.size ? '' : 'none';
+  if (count) count.textContent = `${playerSelection.size} seleccionat${playerSelection.size === 1 ? '' : 's'}`;
+  document.querySelectorAll('#playerList li').forEach(li => {
+    li.classList.toggle('selected', false);
+    const cb = li.querySelector('.player-check');
+    if (cb) {
+      cb.checked = playerSelection.has(parseInt(cb.value));
+      li.classList.toggle('selected', cb.checked);
+    }
+  });
+}
+
+function clearPlayersSelection() {
+  playerSelection.clear();
+  updatePlayersSel();
+}
+
+async function applyBulkTeam() {
+  if (playerSelection.size === 0) return;
+  const bulkSel = document.getElementById('bulkTeamSelect');
+  const teamId = bulkSel ? (parseInt(bulkSel.value) || null) : null;
+  for (const id of playerSelection) {
+    const p = await DB.get('players', id);
+    if (p) {
+      p.teamId = teamId;
+      await DB.put('players', p);
+    }
+  }
+  playerSelection.clear();
+  renderPlayers();
 }
 
 async function addPlayer() {
@@ -386,16 +452,7 @@ async function addPlayer() {
   const number = document.getElementById('playerNumber').value.trim();
   const teamId = parseInt(document.getElementById('playerTeam').value) || null;
   if (!name) return alert('Introdueix un nom');
-
-  if (editingPlayerId) {
-    await DB.put('players', { id: editingPlayerId, name, number: number || '', teamId });
-    editingPlayerId = null;
-    document.getElementById('btnPlayerSave').textContent = 'Afegir';
-    document.getElementById('btnPlayerCancel').style.display = 'none';
-  } else {
-    await DB.add('players', { name, number: number || '', teamId });
-  }
-
+  await DB.add('players', { name, number: number || '', teamId });
   document.getElementById('playerName').value = '';
   document.getElementById('playerNumber').value = '';
   renderPlayers();
@@ -403,33 +460,29 @@ async function addPlayer() {
 
 function editPlayer(id) {
   editingPlayerId = id;
-  const playersList = document.querySelectorAll('#playerList li');
-  DB.get('players', id).then(p => {
-    if (p) {
-      document.getElementById('playerName').value = p.name;
-      document.getElementById('playerNumber').value = p.number || '';
-      const teamSel = document.getElementById('playerTeam');
-      if (teamSel) {
-        const hasTeam = teamSel.options && Array.from(teamSel.options).some(o => o.value === String(p.teamId));
-        teamSel.value = hasTeam ? String(p.teamId) : '';
-      }
-      document.getElementById('btnPlayerSave').textContent = 'Actualitzar';
-      document.getElementById('btnPlayerCancel').style.display = '';
-    }
-  });
+  renderPlayers();
+}
+
+async function saveInlinePlayer(id) {
+  const name = document.getElementById('inlineName').value.trim();
+  if (!name) return alert('Introdueix un nom');
+  const number = document.getElementById('inlineNumber').value.trim();
+  const teamSel = document.getElementById('inlineTeam');
+  const teamId = teamSel ? (parseInt(teamSel.value) || null) : null;
+  await DB.put('players', { id, name, number: number || '', teamId });
+  editingPlayerId = null;
+  renderPlayers();
 }
 
 function cancelEditPlayer() {
   editingPlayerId = null;
-  document.getElementById('playerName').value = '';
-  document.getElementById('playerNumber').value = '';
-  document.getElementById('btnPlayerSave').textContent = 'Afegir';
-  document.getElementById('btnPlayerCancel').style.display = 'none';
+  renderPlayers();
 }
 
 async function deletePlayer(id) {
   if (!confirm('Eliminar jugador?')) return;
-  if (editingPlayerId === id) cancelEditPlayer();
+  if (editingPlayerId === id) editingPlayerId = null;
+  playerSelection.delete(id);
   await DB.delete('players', id);
   renderPlayers();
 }

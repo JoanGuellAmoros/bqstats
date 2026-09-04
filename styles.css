@@ -37,6 +37,7 @@ body { background: #1a1a2e; color: #e0e0e0; }
 /* player list */
 .player-item { cursor: pointer; }
 .player-item.editing { background: rgba(0,200,83,0.15); }
+.player-item.selected { background: rgba(13,110,253,0.15); }
 
 /* checkbox list for player select */
 #playerSelectList .form-check { padding: 6px 8px; border-radius: 6px; }
