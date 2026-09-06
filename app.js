@@ -782,9 +782,7 @@ async function renderLiveStats(playerMap) {
 
   let html = '<table class="table table-dark table-striped table-sm stats-table"><thead><tr><th>Jug</th>';
   html += '<th>PTS</th><th>REB</th><th>AST</th>';
-  html += '<th>2PM</th><th>2PI</th><th>2P%</th>';
-  html += '<th>3PM</th><th>3PI</th><th>3P%</th>';
-  html += '<th>TLM</th><th>TLI</th><th>TL%</th>';
+  html += '<th>T1</th><th>%T1</th><th>T2</th><th>%T2</th><th>T3</th><th>%T3</th>';
   REST_FIELDS.forEach(f => html += `<th>${STAT_LABELS[f]}</th>`);
   html += '<th>VAL</th></tr></thead><tbody>';
 
@@ -808,7 +806,7 @@ async function renderLiveStats(playerMap) {
       return an - bn;
     });
   let benchStarted = false;
-  const colCount = 4 + 9 + REST_FIELDS.length + 1;
+  const colCount = 4 + 6 + REST_FIELDS.length + 1;
   const benchSpacer = `<tr class="bench-spacer"><td colspan="${colCount}"><span class="bench-label">&#128102; Banqueta</span></td></tr>`;
   sorted.forEach(s => {
     const on = court.includes(s.playerId);
@@ -823,9 +821,9 @@ async function renderLiveStats(playerMap) {
     const reb = s.oReb + s.dReb;
     html += `<tr><td class="player-name">${esc(name)}</td>`;
     html += `<td>${pts}</td><td>${reb}</td><td>${s.assists}</td>`;
-    html += `<td>${s.twoMade}</td><td>${s.twoMissed}</td><td>${pct(s.twoMade, s.twoMissed)}</td>`;
-    html += `<td>${s.threeMade}</td><td>${s.threeMissed}</td><td>${pct(s.threeMade, s.threeMissed)}</td>`;
-    html += `<td>${s.ftMade}</td><td>${s.ftMissed}</td><td>${pct(s.ftMade, s.ftMissed)}</td>`;
+    html += `<td>${s.twoMade}/${s.twoMissed}</td><td>${pct(s.twoMade, s.twoMissed)}</td>`;
+    html += `<td>${s.threeMade}/${s.threeMissed}</td><td>${pct(s.threeMade, s.threeMissed)}</td>`;
+    html += `<td>${s.ftMade}/${s.ftMissed}</td><td>${pct(s.ftMade, s.ftMissed)}</td>`;
     REST_FIELDS.forEach(f => html += `<td>${s[f]}</td>`);
     html += `<td class="${val >= 0 ? 'val-pos' : 'val-neg'}">${val}</td></tr>`;
     REST_FIELDS.forEach(f => totalRow[f] += s[f]);
@@ -840,9 +838,9 @@ async function renderLiveStats(playerMap) {
   const totalReb = totalRow.oReb + totalRow.dReb;
   html += `<tr class="total-row"><td class="player-name">TOTAL</td>`;
   html += `<td>${totalPts}</td><td>${totalReb}</td><td>${totalRow.assists}</td>`;
-  html += `<td>${totalRow.twoMade}</td><td>${totalRow.twoMissed}</td><td>${pct(totalRow.twoMade, totalRow.twoMissed)}</td>`;
-  html += `<td>${totalRow.threeMade}</td><td>${totalRow.threeMissed}</td><td>${pct(totalRow.threeMade, totalRow.threeMissed)}</td>`;
-  html += `<td>${totalRow.ftMade}</td><td>${totalRow.ftMissed}</td><td>${pct(totalRow.ftMade, totalRow.ftMissed)}</td>`;
+  html += `<td>${totalRow.twoMade}/${totalRow.twoMissed}</td><td>${pct(totalRow.twoMade, totalRow.twoMissed)}</td>`;
+  html += `<td>${totalRow.threeMade}/${totalRow.threeMissed}</td><td>${pct(totalRow.threeMade, totalRow.threeMissed)}</td>`;
+  html += `<td>${totalRow.ftMade}/${totalRow.ftMissed}</td><td>${pct(totalRow.ftMade, totalRow.ftMissed)}</td>`;
   REST_FIELDS.forEach(f => html += `<td>${totalRow[f]}</td>`);
   html += `<td class="${totalVal >= 0 ? 'val-pos' : 'val-neg'}">${totalVal}</td></tr>`;
 
