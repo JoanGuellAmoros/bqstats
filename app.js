@@ -253,6 +253,56 @@ async function doSubstitution(inId) {
   renderLiveGame();
 }
 
+async function openAddPlayerPopup() {
+  if (!activeGame) return;
+  const players = await DB.getAll('players');
+  const others = players.filter(p => !activeGame.playerIds.includes(p.id));
+  const createForm = `
+    <div class="small text-secondary mb-1">Crear jugador nou:</div>
+    <div class="input-group mb-3">
+      <input type="text" id="newLiveName" class="form-control" placeholder="Nom">
+      <input type="number" id="newLiveNumber" class="form-control" placeholder="Num." min="0" max="99" style="max-width:70px">
+    </div>`;
+  const list = others.length
+    ? `<div class="small text-secondary mb-1">O tria'n un d'existent:</div>` +
+      others.map(p => `
+        <button class="btn btn-outline-light w-100 mb-1 d-flex align-items-center justify-content-between" onclick="addPlayerToLiveGame(${p.id})">
+          <span>${esc(playerLabel(p))}</span>
+        </button>`).join('')
+    : `<div class="small text-secondary mb-2">Tots els jugadors ja són a la convocatòria.</div>`;
+  openPopup('Afegir jugador', createForm + list,
+    `<button class="btn btn-outline-secondary" onclick="closePopup()">Cancel·lar</button>
+     <button class="btn btn-primary" onclick="createAndAddPlayerToLive()">Afegir</button>`);
+}
+
+async function createAndAddPlayerToLive() {
+  const name = document.getElementById('newLiveName').value.trim();
+  if (!name) return alert('Introdueix un nom');
+  const number = document.getElementById('newLiveNumber').value.trim();
+  const teamId = activeGame ? activeGame.teamId : null;
+  const pid = await DB.add('players', { name, number: number || '', teamId });
+  await addPlayerToLiveGame(pid);
+}
+
+async function addPlayerToLiveGame(pid) {
+  if (!activeGame || activeGame.playerIds.includes(pid)) {
+    closePopup();
+    return;
+  }
+  activeGame.playerIds.push(pid);
+  activePlayerStats[pid] = { gameId: activeGame.id, playerId: pid, ...emptyStats() };
+  const ts = totalStats();
+  const sc = calcScore(ts);
+  const rs = calcRivalScore();
+  actionLog.push({ type: 'addPlayer', playerId: pid, period: activeGame.currentPeriod, teamScore: sc, rivalScore: rs });
+  if (!isEditing) {
+    await DB.put('games', activeGame);
+    await DB.add('stats', { ...activePlayerStats[pid] });
+  }
+  closePopup();
+  renderLiveGame();
+}
+
 // NAVIGATION
 function navigateTo(viewId) {
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
@@ -681,6 +731,7 @@ async function renderLiveGame() {
   if (allTabs[tabIdx]) allTabs[tabIdx].classList.add('active');
 
   document.getElementById('btnSubstitute').style.display = isEditing ? 'none' : '';
+  document.getElementById('btnAddPlayerLive').style.display = isEditing ? 'none' : '';
 
   renderLiveStats(playerMap);
   renderActionLog().catch(() => {});
@@ -746,16 +797,20 @@ async function renderLiveStats(playerMap) {
       return an - bn;
     });
   let benchStarted = false;
+  const colCount = 4 + 9 + REST_FIELDS.length + 1;
+  const benchSpacer = `<tr class="bench-spacer"><td colspan="${colCount}"><span class="bench-label">&#128102; Banqueta</span></td></tr>`;
   sorted.forEach(s => {
     const on = court.includes(s.playerId);
-    if (!on && !benchStarted) benchStarted = true;
-    const rowClass = benchStarted && !on ? ' bench-sep' : '';
+    if (!on && !benchStarted) {
+      benchStarted = true;
+      html += benchSpacer;
+    }
     const p = playerMap[s.playerId];
     const name = p ? abbrevName(p) : '?';
     const pts = calcScore(s);
     const val = calcVal(s);
     const reb = s.oReb + s.dReb;
-    html += `<tr class="${rowClass.trim()}"><td class="player-name">${esc(name)}</td>`;
+    html += `<tr><td class="player-name">${esc(name)}</td>`;
     html += `<td>${pts}</td><td>${reb}</td><td>${s.assists}</td>`;
     html += `<td>${s.twoMade}</td><td>${s.twoMissed}</td><td>${pct(s.twoMade, s.twoMissed)}</td>`;
     html += `<td>${s.threeMade}</td><td>${s.threeMissed}</td><td>${pct(s.threeMade, s.threeMissed)}</td>`;
@@ -839,6 +894,21 @@ async function undoLastAction() {
 
   const last = actionLog.pop();
 
+  if (last.type === 'addPlayer') {
+    const pid = last.playerId;
+    const idx = activeGame.playerIds.indexOf(pid);
+    if (idx >= 0) activeGame.playerIds.splice(idx, 1);
+    delete activePlayerStats[pid];
+    if (!isEditing) {
+      const existing = await DB.getByIndex('stats', 'gameId', activeGame.id);
+      const found = existing.find(s => s.playerId === pid);
+      if (found) await DB.delete('stats', found.id);
+      await DB.put('games', activeGame);
+    }
+    renderLiveGame();
+    return;
+  }
+
   if (last.type === 'sub') {
     const court = ensureOnCourt();
     const inIdx = court.indexOf(last.inId);
@@ -908,6 +978,12 @@ async function renderActionLog() {
     const entry = actionLog[i];
     const qStr = entry.period ? `Q${entry.period}` : '';
     const scoreStr = (entry.teamScore !== undefined && entry.rivalScore !== undefined) ? `${entry.teamScore}-${entry.rivalScore}` : '';
+    if (entry.type === 'addPlayer') {
+      const p = pMap[entry.playerId];
+      const label = p ? abbrevName(p) : '#' + entry.playerId;
+      html += `<div class="log-entry">${qStr ? `<span class="log-q">${qStr}</span>` : ''}<span class="log-player">${esc(label)}</span> <span class="log-action">afegit</span>${scoreStr ? ` <span class="log-score">${scoreStr}</span>` : ''}</div>`;
+      continue;
+    }
     if (entry.type === 'sub') {
       const pOut = pMap[entry.outId];
       const pIn = pMap[entry.inId];

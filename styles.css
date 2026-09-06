@@ -48,7 +48,8 @@ body { background: #1a1a2e; color: #e0e0e0; }
 .stats-table td, .stats-table th { padding: 4px 8px; white-space: nowrap; }
 .stats-table .player-name { font-weight: 600; color: var(--primary); text-align: left; }
 .stats-table .total-row td { border-top: 2px solid var(--primary); font-weight: 700; }
-.stats-table .bench-sep td { border-top: 2px solid var(--secondary); border-top-style: dashed; }
+.stats-table .bench-spacer td { padding: 3px 8px; border-top: 2px dashed var(--secondary); background: rgba(255,255,255,0.03); }
+.bench-label { color: var(--secondary); font-size: 0.75rem; letter-spacing: 1px; text-transform: uppercase; }
 .live-toggle-btn { min-width: 8.5rem; height: calc(1.5em + 0.5rem + 2px); line-height: 1.5; display: inline-flex; align-items: center; justify-content: center; }
 .val-pos { color: var(--primary); font-weight: 600; }
 .val-neg { color: var(--danger); font-weight: 600; }
