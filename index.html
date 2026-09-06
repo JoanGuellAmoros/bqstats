@@ -14,6 +14,7 @@
     <header class="px-3 py-2 d-flex align-items-center gap-2 border-bottom border-secondary">
       <button id="btnBack" class="btn btn-sm btn-outline-light" onclick="navigateBack()" style="display:none">&larr;</button>
       <h1 id="appTitle" class="fs-5 fw-bold mb-0 flex-grow-1">Basquet Stats</h1>
+      <button id="btnAddPlayerTop" class="btn btn-sm btn-outline-success" onclick="openAddPlayerPopup()" style="display:none" title="Afegir jugador" aria-label="Afegir jugador">&#10133;</button>
     </header>
 
     <main id="mainContent" class="container-fluid px-2 py-2">
@@ -38,6 +39,10 @@
           <input type="number" id="playerNumber" class="form-control" placeholder="Num." min="0" max="99" style="max-width:70px">
           <select id="playerTeam" class="form-select" style="max-width:120px"></select>
           <button class="btn btn-primary" id="btnPlayerSave" onclick="addPlayer()">Afegir</button>
+        </div>
+        <div class="d-flex align-items-center gap-2 mb-2">
+          <label class="small text-secondary mb-0 text-nowrap">Filtrar per equip:</label>
+          <select id="playerTeamFilter" class="form-select form-select-sm flex-grow-1" onchange="renderPlayers()"></select>
         </div>
         <div class="d-flex gap-2 align-items-center mb-2" id="bulkBar" style="display:none">
           <span id="bulkCount" class="small text-secondary text-nowrap">0 seleccionats</span>
@@ -102,7 +107,6 @@
         <div class="live-controls mb-2" id="liveControls">
           <div class="d-flex gap-2 align-items-center mb-2">
             <button class="btn btn-sm btn-outline-warning flex-grow-1" id="btnSubstitute" onclick="openSubstitution()">&#8646; Canvi</button>
-            <button class="btn btn-sm btn-outline-success flex-grow-1" id="btnAddPlayerLive" onclick="openAddPlayerPopup()">&#10133; Jugador</button>
           </div>
           <div class="mb-1 d-flex flex-wrap gap-1 justify-content-center" id="statButtons">
             <button class="btn btn-outline-success stat-btn" onclick="addStat('twoMade')">2P+</button>
@@ -131,7 +135,7 @@
           <div class="d-flex gap-2 align-items-center justify-content-center flex-wrap">
             <button class="btn btn-sm btn-outline-secondary live-toggle-btn" id="btnUndo" onclick="undoLastAction()" disabled>&#8630; Desfer</button>
             <button class="btn btn-sm btn-outline-secondary live-toggle-btn" id="btnToggleStats" onclick="toggleStats()">&#128200; Amagar</button>
-            <button class="btn btn-sm btn-secondary live-toggle-btn" id="btnToggleLog" onclick="toggleActionLog()">&#128172; Jugada</button>
+            <button class="btn btn-sm btn-secondary live-toggle-btn" id="btnToggleLog" onclick="toggleActionLog()">&#128220; Mostrar</button>
           </div>
         </div>
         <div class="stats-scroll">
@@ -198,7 +202,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
   <script src="db.js"></script>
-  <script src="app.js?v=18"></script>
+  <script src="app.js?v=19"></script>
   <script>
     try {
       if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {

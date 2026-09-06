@@ -256,7 +256,7 @@ async function doSubstitution(inId) {
 async function openAddPlayerPopup() {
   if (!activeGame) return;
   const players = await DB.getAll('players');
-  const others = players.filter(p => !activeGame.playerIds.includes(p.id));
+  const others = players.filter(p => !activeGame.playerIds.includes(p.id) && p.teamId === activeGame.teamId);
   const createForm = `
     <div class="small text-secondary mb-1">Crear jugador nou:</div>
     <div class="input-group mb-3">
@@ -264,12 +264,12 @@ async function openAddPlayerPopup() {
       <input type="number" id="newLiveNumber" class="form-control" placeholder="Num." min="0" max="99" style="max-width:70px">
     </div>`;
   const list = others.length
-    ? `<div class="small text-secondary mb-1">O tria'n un d'existent:</div>` +
+    ? `<div class="small text-secondary mb-1">Del teu equip:</div>` +
       others.map(p => `
         <button class="btn btn-outline-light w-100 mb-1 d-flex align-items-center justify-content-between" onclick="addPlayerToLiveGame(${p.id})">
           <span>${esc(playerLabel(p))}</span>
         </button>`).join('')
-    : `<div class="small text-secondary mb-2">Tots els jugadors ja són a la convocatòria.</div>`;
+    : `<div class="small text-secondary mb-2">Tots els jugadors del teu equip ja són a la convocatòria.</div>`;
   openPopup('Afegir jugador', createForm + list,
     `<button class="btn btn-outline-secondary" onclick="closePopup()">Cancel·lar</button>
      <button class="btn btn-primary" onclick="createAndAddPlayerToLive()">Afegir</button>`);
@@ -308,6 +308,8 @@ function navigateTo(viewId) {
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
   document.getElementById(viewId).classList.add('active');
   document.getElementById('btnBack').style.display = viewId === 'viewHome' ? 'none' : 'block';
+  document.getElementById('btnAddPlayerTop').style.display =
+    (viewId === 'viewLiveGame' && activeGame && !isEditing) ? '' : 'none';
 
   const titles = {
     viewHome: 'Bàsquet Stats',
@@ -411,6 +413,13 @@ async function renderPlayers() {
     teamSel.innerHTML = teams.map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join('') ||
       `<option value="">Sense equip</option>`;
   }
+  const filterSel = document.getElementById('playerTeamFilter');
+  if (filterSel) {
+    filterSel.innerHTML = `<option value="all">Tots</option>` +
+      teams.map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join('') ||
+      `<option value="all">Sense equip</option>`;
+    if (!filterSel.value) filterSel.value = 'all';
+  }
   const bulkSel = document.getElementById('bulkTeamSelect');
   if (bulkSel) {
     bulkSel.innerHTML = `<option value="">Sense equip</option>` +
@@ -423,6 +432,9 @@ async function renderPlayers() {
     return;
   }
   const sorted = players.slice().sort((a, b) => (teamMap[a.teamId] ? teamMap[a.teamId].name : '').localeCompare(teamMap[b.teamId] ? teamMap[b.teamId].name : '') || a.name.localeCompare(b.name));
+  const filtered = filterSel && filterSel.value !== 'all'
+    ? sorted.filter(p => String(p.teamId) === filterSel.value)
+    : sorted;
   list.innerHTML = sorted.map(p => {
     const team = teamMap[p.teamId];
     if (editingPlayerId === p.id) {
@@ -731,7 +743,6 @@ async function renderLiveGame() {
   if (allTabs[tabIdx]) allTabs[tabIdx].classList.add('active');
 
   document.getElementById('btnSubstitute').style.display = isEditing ? 'none' : '';
-  document.getElementById('btnAddPlayerLive').style.display = isEditing ? 'none' : '';
 
   renderLiveStats(playerMap);
   renderActionLog().catch(() => {});
@@ -956,6 +967,7 @@ function toggleActionLog() {
   logVisible = !logVisible;
   const el = document.getElementById('liveActionLog');
   el.style.display = logVisible ? 'block' : 'none';
+  document.getElementById('btnToggleLog').innerHTML = '&#128220; ' + (logVisible ? 'Amagar' : 'Mostrar');
 }
 
 function toggleStats() {
@@ -972,9 +984,8 @@ async function renderActionLog() {
   players.forEach(p => pMap[p.id] = p);
 
   const max = Math.min(actionLog.length, 50);
-  const start = actionLog.length - max;
   let html = '';
-  for (let i = start; i < actionLog.length; i++) {
+  for (let i = actionLog.length - 1; i >= actionLog.length - max; i--) {
     const entry = actionLog[i];
     const qStr = entry.period ? `Q${entry.period}` : '';
     const scoreStr = (entry.teamScore !== undefined && entry.rivalScore !== undefined) ? `${entry.teamScore}-${entry.rivalScore}` : '';
@@ -1002,7 +1013,7 @@ async function renderActionLog() {
     html += `<div class="log-entry">${qStr ? `<span class="log-q">${qStr}</span>` : ''}<span class="log-player">${esc(label)}</span> <span class="log-action">${esc(actionText)}</span>${scoreStr ? ` <span class="log-score">${scoreStr}</span>` : ''}</div>`;
   }
   container.innerHTML = html || '<div class="log-entry text-secondary">Cap acció encara</div>';
-  container.scrollTop = container.scrollHeight;
+  container.scrollTop = 0;
 }
 
 async function addRivalStat(points) {
