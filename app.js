@@ -104,6 +104,19 @@ function calcQuarterScore() {
   return { team, rival };
 }
 
+function periodLabel(period, periods) {
+  if (period <= periods) return `Quart ${period}/${periods}`;
+  const ot = period - periods;
+  return `${ot}.a Pròrroga`;
+}
+
+function periodsDesc(game) {
+  if (game.currentPeriod > game.periods) {
+    return `${game.periods} quarts + ${game.currentPeriod - game.periods}.a pròrroga`;
+  }
+  return `${game.periods} quarts`;
+}
+
 function updateLiveScore() {
   const ts = totalStats();
   const sc = calcScore(ts);
@@ -378,7 +391,7 @@ async function renderHome() {
       const rPts = (g.rival1pt || 0) + (g.rival2pt || 0) * 2 + (g.rival3pt || 0) * 3;
       const isCurrent = activeGame && activeGame.id === g.id;
       activeHtml += `<button class="btn ${isCurrent ? 'btn-success' : 'btn-outline-success'} w-100 mb-1 py-2 text-start" onclick="resumeGame(${g.id})">
-        &#127936; ${esc(g.team)} ${pts} - ${rPts} ${esc(g.opponent)}<br><small>Q${g.currentPeriod}/${g.periods} ${isCurrent ? '(actual)' : ''}</small>
+        &#127936; ${esc(g.team)} ${pts} - ${rPts} ${esc(g.opponent)}<br><small>${periodLabel(g.currentPeriod, g.periods)} ${isCurrent ? '(actual)' : ''}</small>
       </button>`;
     });
   }
@@ -721,7 +734,7 @@ async function renderLiveGame() {
   updateLiveScore();
 
   if (!isEditing) {
-    document.getElementById('livePeriod').textContent = `Quart ${activeGame.currentPeriod}/${activeGame.periods}`;
+    document.getElementById('livePeriod').textContent = periodLabel(activeGame.currentPeriod, activeGame.periods);
   } else {
     document.getElementById('livePeriod').textContent = 'Mode Edició';
   }
@@ -1030,20 +1043,19 @@ async function addRivalStat(points) {
 }
 
 async function nextPeriod() {
-  if (activeGame.currentPeriod < activeGame.periods) {
-    activeGame.currentPeriod++;
-    if (!isEditing) await DB.put('games', activeGame);
-    document.getElementById('livePeriod').textContent = `Quart ${activeGame.currentPeriod}/${activeGame.periods}`;
-    updateLiveScore();
-  }
+  activeGame.currentPeriod++;
+  if (!isEditing) await DB.put('games', activeGame);
+  document.getElementById('livePeriod').textContent = periodLabel(activeGame.currentPeriod, activeGame.periods);
+  updateLiveScore();
 }
 
 async function prevPeriod() {
   if (activeGame.currentPeriod <= 1) return;
-  if (!confirm(`Vols tornar al quart ${activeGame.currentPeriod - 1}?`)) return;
-  activeGame.currentPeriod--;
+  const target = activeGame.currentPeriod - 1;
+  if (!confirm(`Vols tornar al ${periodLabel(target, activeGame.periods).toLowerCase()}?`)) return;
+  activeGame.currentPeriod = target;
   if (!isEditing) await DB.put('games', activeGame);
-  document.getElementById('livePeriod').textContent = `Quart ${activeGame.currentPeriod}/${activeGame.periods}`;
+  document.getElementById('livePeriod').textContent = periodLabel(activeGame.currentPeriod, activeGame.periods);
   updateLiveScore();
 }
 
@@ -1145,7 +1157,7 @@ async function renderHistory() {
       <li class="list-group-item list-group-item-action d-flex align-items-center justify-content-between px-2 py-2 game-item" data-game-id="${g.id}">
         <div>
           <div class="fw-semibold">${esc(g.team)} <span class="game-score">${pts}</span> - ${rPts} ${esc(g.opponent)} ${status}</div>
-          <div class="small text-secondary">${dateStr} &middot; ${g.periods} quarts</div>
+          <div class="small text-secondary">${dateStr} &middot; ${periodsDesc(g)}</div>
         </div>
         <button class="btn btn-sm btn-outline-danger delete-game-btn" data-game-id="${g.id}">&#128465;</button>
       </li>
@@ -1200,7 +1212,7 @@ async function viewGameDetail(gameId) {
       <span style="color:${!homeSide ? 'var(--primary)' : '#888'}">${esc(game.opponent)}</span>
     </div>
     <div class="fs-3 fw-bold" style="color:var(--primary)">${gPts} - ${gRival}</div>
-    <div class="small text-secondary mb-2">${dateStr} &middot; ${game.periods} quarts</div>
+    <div class="small text-secondary mb-2">${dateStr} &middot; ${periodsDesc(game)}</div>
   `;
 
   // Stats table
@@ -1273,11 +1285,13 @@ function renderDetailPlays(game, playerMap, homeSide) {
   }
 
   const periods = game.periods || 4;
+  const maxActionsPeriod = game.actions.reduce((m, a) => (a.period && a.period > m) ? a.period : m, periods);
 
   let html = '<div class="btn-group btn-group-sm mb-2 flex-wrap">';
   html += `<button class="btn btn-outline-secondary ${detailQuarterFilter === null ? 'active' : ''}" onclick="setDetailQuarter(null,${game.id})">Tots</button>`;
-  for (let q = 1; q <= periods; q++) {
-    html += `<button class="btn btn-outline-secondary ${detailQuarterFilter === q ? 'active' : ''}" onclick="setDetailQuarter(${q},${game.id})">Q${q}</button>`;
+  for (let q = 1; q <= maxActionsPeriod; q++) {
+    const label = q <= periods ? `Q${q}` : `P${q - periods}`;
+    html += `<button class="btn btn-outline-secondary ${detailQuarterFilter === q ? 'active' : ''}" onclick="setDetailQuarter(${q},${game.id})">${label}</button>`;
   }
   html += '</div>';
 
@@ -1285,7 +1299,7 @@ function renderDetailPlays(game, playerMap, homeSide) {
 
   const filtered = detailQuarterFilter === null ? game.actions : game.actions.filter(a => a.period === detailQuarterFilter);
   filtered.forEach(a => {
-    const qStr = a.period ? `Q${a.period}` : '?';
+    const qStr = a.period ? (a.period <= periods ? `Q${a.period}` : `P${a.period - periods}`) : '?';
     const scoreStr = (a.teamScore !== undefined && a.rivalScore !== undefined) ? `${a.teamScore} - ${a.rivalScore}` : '';
 
     if (a.type === 'sub') {
