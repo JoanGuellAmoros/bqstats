@@ -339,7 +339,9 @@ function navigateTo(viewId) {
   updateBottomNav();
   switch (viewId) {
     case 'viewHome': renderHome(); break;
-    case 'viewPlayers': renderPlayers(); break;
+    case 'viewPlayers':
+      { const f = document.getElementById('playerTeamFilter'); if (f) f.value = 'all'; }
+      renderPlayers(); break;
     case 'viewTeams': renderTeams(); break;
     case 'viewNewGame': renderNewGame(); break;
     case 'viewHistory': renderHistory(); break;
@@ -454,7 +456,7 @@ async function renderPlayers() {
   const filtered = filterSel && filterSel.value !== 'all'
     ? sorted.filter(p => String(p.teamId) === filterSel.value)
     : sorted;
-  list.innerHTML = sorted.map(p => {
+  list.innerHTML = filtered.map(p => {
     const team = teamMap[p.teamId];
     if (editingPlayerId === p.id) {
       const teamOpts = `<option value="">Sense equip</option>` + teams.map(t =>
@@ -809,10 +811,10 @@ async function renderLiveStats(playerMap) {
   const container = document.getElementById('liveStats');
 
   let html = '<table class="table table-dark table-striped table-sm stats-table"><thead><tr><th>Jug</th>';
-  html += '<th>PTS</th><th>REB</th><th>AST</th>';
+  html += '<th>PTS</th><th>REB</th><th>AST</th><th>VAL</th>';
   html += '<th>T1</th><th>%T1</th><th>T2</th><th>%T2</th><th>T3</th><th>%T3</th>';
   REST_FIELDS.forEach(f => html += `<th>${STAT_LABELS[f]}</th>`);
-  html += '<th>VAL</th></tr></thead><tbody>';
+  html += '</tr></thead><tbody>';
 
   const totalRow = emptyStats();
   const court = onCourtIds();
@@ -848,12 +850,12 @@ async function renderLiveStats(playerMap) {
     const val = calcVal(s);
     const reb = s.oReb + s.dReb;
     html += `<tr><td class="player-name">${esc(name)}</td>`;
-    html += `<td>${pts}</td><td>${reb}</td><td>${s.assists}</td>`;
+    html += `<td>${pts}</td><td>${reb}</td><td>${s.assists}</td><td class="${val >= 0 ? 'val-pos' : 'val-neg'}">${val}</td>`;
     html += `<td>${s.ftMade}/${s.ftMissed}</td><td>${pct(s.ftMade, s.ftMissed)}</td>`;
     html += `<td>${s.twoMade}/${s.twoMissed}</td><td>${pct(s.twoMade, s.twoMissed)}</td>`;
     html += `<td>${s.threeMade}/${s.threeMissed}</td><td>${pct(s.threeMade, s.threeMissed)}</td>`;
     REST_FIELDS.forEach(f => html += `<td>${s[f]}</td>`);
-    html += `<td class="${val >= 0 ? 'val-pos' : 'val-neg'}">${val}</td></tr>`;
+    html += '</tr>';
     REST_FIELDS.forEach(f => totalRow[f] += s[f]);
     totalRow.assists += s.assists;
     totalRow.twoMade += s.twoMade; totalRow.twoMissed += s.twoMissed;
@@ -865,12 +867,12 @@ async function renderLiveStats(playerMap) {
   const totalVal = calcVal(totalRow);
   const totalReb = totalRow.oReb + totalRow.dReb;
   html += `<tr class="total-row"><td class="player-name">TOTAL</td>`;
-  html += `<td>${totalPts}</td><td>${totalReb}</td><td>${totalRow.assists}</td>`;
+  html += `<td>${totalPts}</td><td>${totalReb}</td><td>${totalRow.assists}</td><td class="${totalVal >= 0 ? 'val-pos' : 'val-neg'}">${totalVal}</td>`;
   html += `<td>${totalRow.ftMade}/${totalRow.ftMissed}</td><td>${pct(totalRow.ftMade, totalRow.ftMissed)}</td>`;
   html += `<td>${totalRow.twoMade}/${totalRow.twoMissed}</td><td>${pct(totalRow.twoMade, totalRow.twoMissed)}</td>`;
   html += `<td>${totalRow.threeMade}/${totalRow.threeMissed}</td><td>${pct(totalRow.threeMade, totalRow.threeMissed)}</td>`;
   REST_FIELDS.forEach(f => html += `<td>${totalRow[f]}</td>`);
-  html += `<td class="${totalVal >= 0 ? 'val-pos' : 'val-neg'}">${totalVal}</td></tr>`;
+  html += '</tr>';
 
   html += '</tbody></table>';
   container.innerHTML = html;
@@ -1032,7 +1034,14 @@ async function renderActionLog() {
     if (label) {
       const made = label === 'T2' ? cum.twoMade : label === 'T3' ? cum.threeMade : cum.ftMade;
       const missed = label === 'T2' ? cum.twoMissed : label === 'T3' ? cum.threeMissed : cum.ftMissed;
+      if (f0 === 'twoMade' || f0 === 'threeMade' || f0 === 'ftMade') {
+        const pts = cum.twoMade * 2 + cum.threeMade * 3 + cum.ftMade;
+        return ` (${made}/${missed} ${label} - ${pts}p)`;
+      }
       return ` (${made}/${missed} ${label})`;
+    }
+    if (f0 === 'oReb' || f0 === 'dReb') {
+      return ` (${cum[f0]}${f0 === 'oReb' ? 'RO' : 'RD'} - ${cum.oReb + cum.dReb}RT)`;
     }
     return ` (${cum[f0]} ${STAT_LABELS[f0] || f0})`;
   };
