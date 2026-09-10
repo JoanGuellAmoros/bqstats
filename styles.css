@@ -47,6 +47,8 @@ body { background: #1a1a2e; color: #e0e0e0; }
 .stats-table { font-size: 0.8rem; width: 100%; }
 .stats-table td, .stats-table th { padding: 4px 8px; white-space: nowrap; }
 .stats-table .player-name { font-weight: 600; color: var(--primary); text-align: left; }
+.stats-table th { cursor: pointer; white-space: nowrap; user-select: none; }
+.stats-table th.sort-active { color: var(--primary); }
 .stats-table .total-row td { border-top: 2px solid var(--primary); font-weight: 700; }
 .stats-table .bench-spacer td { padding: 3px 8px; border-top: 2px dashed var(--secondary); background: rgba(255,255,255,0.03); }
 .bench-label { color: var(--secondary); font-size: 0.75rem; letter-spacing: 1px; text-transform: uppercase; }
@@ -85,6 +87,9 @@ body { background: #1a1a2e; color: #e0e0e0; }
 .game-item { cursor: pointer; }
 .game-item .game-score { font-weight: 700; color: var(--primary); }
 .game-item .game-info { font-size: 0.75rem; color: #888; }
+
+/* players */
+.player-inactive { opacity: 0.55; }
 
 /* home active game alert */
 .home-active { font-size: 0.85rem; }

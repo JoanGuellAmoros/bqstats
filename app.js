@@ -7,6 +7,8 @@ let logVisible = false;
 let statsVisible = true;
 let editingPlayerId = null;
 let statsMode = 'totals';
+let statsSortKey = null;
+let statsSortAsc = true;
 let detailQuarterFilter = null;
 let gameSelection = new Set();
 
@@ -29,26 +31,27 @@ const REST_FIELDS = ['oReb','dReb','turnovers','steals','blocks','blocksAgainst'
 
 const MADE_AUTO = { twoMade: 'twoMissed', threeMade: 'threeMissed', ftMade: 'ftMissed' };
 
-const GAME_TYPES = ['NBA', 'Lliga Catalana', 'ACB', 'Eurolliga', 'Amistós'];
+const GAME_TYPES = ['NBA', 'Lliga Catalana', 'ACB', 'Eurolliga', 'Supercopa', 'Copa del Rei', 'Amistós'];
 
 // TEAMS
-async function migrateTeams() {
-  let teams = await DB.getAll('teams');
-  if (teams.length === 0) {
-    const tid = await DB.add('teams', { name: 'Sense equip' });
-    teams = [{ id: tid, name: 'Sense equip' }];
-  }
-  const defaultId = teams[0].id;
-  const players = await DB.getAll('players');
-  const games = await DB.getAll('games');
-  let changed = false;
-  for (const p of players) {
-    if (!p.teamId) { p.teamId = defaultId; await DB.put('players', p); changed = true; }
-  }
-  for (const g of games) {
-    if (!g.teamId) { g.teamId = defaultId; await DB.put('games', g); changed = true; }
-  }
-  return changed;
+function seasonOf(d) {
+  const y = parseInt((d || '').slice(0, 4), 10);
+  const m = parseInt((d || '').slice(5, 7), 10);
+  if (isNaN(y) || isNaN(m)) return null;
+  const start = m >= 8 ? y : y - 1;
+  return `${start}-${String(start + 1).slice(2)}`;
+}
+
+function populateSeason(selectId, games) {
+  const sel = document.getElementById(selectId);
+  if (!sel) return;
+  const prev = sel.value;
+  const seasons = Array.from(new Set(games
+    .map(g => seasonOf(g.date))
+    .filter(s => s !== null))).sort();
+  sel.innerHTML = `<option value="all">Tots</option>` +
+    seasons.map(s => `<option value="${s}">${s}</option>`).join('');
+  if (prev !== '' && Array.from(sel.options).some(o => o.value === prev)) sel.value = prev;
 }
 
 function emptyStats() {
@@ -343,7 +346,8 @@ function navigateTo(viewId) {
     viewLiveGame: activeGame && isEditing ? 'Editar Partit' : 'Partit en Viu',
     viewHistory: 'Historial',
     viewGameDetail: 'Detall del Partit',
-    viewStats: 'Estadístiques Globals'
+    viewStats: 'Estadístiques Globals',
+    viewRecords: 'Records'
   };
   document.getElementById('appTitle').textContent = titles[viewId] || 'Bàsquet Stats';
 
@@ -357,8 +361,13 @@ function navigateTo(viewId) {
     case 'viewNewGame': renderNewGame(); break;
     case 'viewHistory': renderHistory(); break;
     case 'viewStats':
-      { const t = document.getElementById('statsTeamFilter'); if (t) t.value = 'all'; const c = document.getElementById('statsTypeFilter'); if (c) c.value = 'all'; }
+      { const t = document.getElementById('statsTeamFilter'); if (t) t.value = 'all'; const c = document.getElementById('statsTypeFilter'); if (c) c.value = 'all'; const s = document.getElementById('statsSeasonFilter'); if (s) s.value = 'all'; }
+      statsSortKey = null; statsSortAsc = true;
       renderGlobalStats(); break;
+    case 'viewRecords': recordsMode = 'game'; recordsQuarter = null; recordsGroup = 'player';
+      { const t = document.getElementById('recordsTeamFilter'); if (t) t.value = 'all'; const c = document.getElementById('recordsTypeFilter'); if (c) c.value = 'all'; const s = document.getElementById('recordsSeasonFilter'); if (s) s.value = 'all'; }
+      { const p = document.getElementById('tabRecordsPlayer'); if (p) p.classList.add('active'); const tm = document.getElementById('tabRecordsTeam'); if (tm) tm.classList.remove('active'); }
+      renderRecords(); break;
   }
 }
 
@@ -412,8 +421,14 @@ async function renderHome() {
   }
 
   if (!hasPlayers) {
+    const teams = await DB.getAll('teams');
+    const hasTeams = teams.length > 0;
+    const cta = hasTeams
+      ? `<button class="btn btn-outline-warning w-100 py-3" onclick="navigateTo('viewPlayers')">&#128101; Afegeix jugadors per començar</button>`
+      : `<button class="btn btn-outline-warning w-100 py-3" onclick="navigateTo('viewTeams')">&#128101; Afegeix equips per començar</button>`;
     grid.innerHTML = `
-      <div class="col-12"><button class="btn btn-outline-warning w-100 py-3" onclick="navigateTo('viewPlayers')">&#128101; Afegeix jugadors per començar</button></div>
+      <div class="col-12">${cta}</div>
+      <div class="col-12"><button class="btn btn-success w-100 py-3" onclick="importGames()">&#10515; Importar dades</button></div>
     `;
     return;
   }
@@ -421,9 +436,11 @@ async function renderHome() {
   grid.innerHTML = `
     ${activeHtml ? '<div class="col-12"><div class="small text-secondary mb-1">Partits en curs:</div>' + activeHtml + '</div>' : ''}
     <div class="col-6"><button class="btn btn-outline-light w-100 py-4 fs-5" onclick="navigateTo('viewNewGame')">&#127936;<br><small>Nou Partit</small></button></div>
-    <div class="col-6"><button class="btn btn-outline-light w-100 py-4 fs-5" onclick="navigateTo('viewPlayers')">&#128101;<br><small>Jugadors</small></button></div>
     <div class="col-6"><button class="btn btn-outline-light w-100 py-4 fs-5" onclick="navigateTo('viewHistory')">&#128214;<br><small>Historial</small></button></div>
+    <div class="col-6"><button class="btn btn-outline-light w-100 py-4 fs-5" onclick="navigateTo('viewPlayers')">&#128100;<br><small>Jugadors</small></button></div>
+    <div class="col-6"><button class="btn btn-outline-light w-100 py-4 fs-5" onclick="navigateTo('viewTeams')">&#128101;<br><small>Equips</small></button></div>
     <div class="col-6"><button class="btn btn-outline-light w-100 py-4 fs-5" onclick="navigateTo('viewStats')">&#128200;<br><small>Estadístiques</small></button></div>
+    <div class="col-6"><button class="btn btn-outline-light w-100 py-4 fs-5" onclick="navigateTo('viewRecords')">&#127942;<br><small>Records</small></button></div>
   `;
 }
 
@@ -436,6 +453,8 @@ async function renderPlayers() {
   const teams = await DB.getAll('teams');
   const teamMap = {};
   teams.forEach(t => teamMap[t.id] = t);
+  const addBox = document.getElementById('playerAddBox');
+  if (addBox) addBox.style.display = teams.length ? '' : 'none';
   const teamSel = document.getElementById('playerTeam');
   if (teamSel) {
     const prevTeam = teamSel.value;
@@ -460,12 +479,33 @@ async function renderPlayers() {
     if (prevBulk !== '' && Array.from(bulkSel.options).some(o => o.value === prevBulk)) bulkSel.value = prevBulk;
   }
   if (players.length === 0) {
-    list.innerHTML = '<div class="text-center text-secondary py-4">&#128101;<br>Cap jugador encara</div>';
     playerSelection = new Set();
     updatePlayersSel();
+    if (teams.length === 0) {
+      list.innerHTML = `
+        <div class="text-center py-4">
+          <div class="fs-1">&#128101;</div>
+          <div class="text-secondary mb-3">No hi ha cap jugador. Primer crea un equip.</div>
+          <button class="btn btn-primary mb-2" onclick="navigateTo('viewTeams')">&#128101; Crear equip</button>
+          <div><button class="btn btn-outline-secondary" onclick="importGames()">&#10515; Importar partits</button></div>
+        </div>`;
+    } else {
+      list.innerHTML = '<div class="text-center text-secondary py-4">&#128101;<br>Cap jugador encara</div>';
+    }
     return;
   }
-  const sorted = players.slice().sort((a, b) => (teamMap[a.teamId] ? teamMap[a.teamId].name : '').localeCompare(teamMap[b.teamId] ? teamMap[b.teamId].name : '') || a.name.localeCompare(b.name));
+  const numOf = p => (p.number !== '' && p.number != null) ? parseInt(p.number) : null;
+  const sorted = players.slice().sort((a, b) => {
+    const teamCmp = (teamMap[a.teamId] ? teamMap[a.teamId].name : '').localeCompare(teamMap[b.teamId] ? teamMap[b.teamId].name : '');
+    if (teamCmp) return teamCmp;
+    const an = numOf(a);
+    const bn = numOf(b);
+    if (an === null && bn === null) return a.name.localeCompare(b.name);
+    if (an === null) return 1;
+    if (bn === null) return -1;
+    if (an !== bn) return an - bn;
+    return a.name.localeCompare(b.name);
+  });
   const filtered = filterSel && filterSel.value !== 'all'
     ? sorted.filter(p => String(p.teamId) === filterSel.value)
     : sorted;
@@ -486,13 +526,15 @@ async function renderPlayers() {
       </li>`;
     }
     const checked = playerSelection.has(p.id) ? ' checked' : '';
+    const inactive = p.active === false;
     return `
-    <li class="list-group-item d-flex align-items-center gap-2 px-2 py-2 player-item">
+    <li class="list-group-item d-flex align-items-center gap-2 px-2 py-2 player-item ${inactive ? 'player-inactive' : ''}">
       <input type="checkbox" class="player-check" value="${p.id}" onchange="togglePlayerSelection(${p.id})"${checked}>
       <div class="d-flex flex-column flex-grow-1">
-        <span>${p.number ? '<span class="text-primary fw-bold">#' + p.number + '</span> ' : ''}${esc(p.name)}</span>
+        <span>${p.number ? '<span class="text-primary fw-bold">#' + p.number + '</span> ' : ''}${esc(p.name)}${inactive ? ' <small class="text-secondary">(inactiu)</small>' : ''}</span>
         <small class="text-secondary" style="${team ? 'color:var(--primary)!important' : ''}">${team ? esc(team.name) : 'Sense equip'}</small>
       </div>
+      <button class="btn btn-sm ${inactive ? 'btn-outline-danger' : 'btn-outline-secondary'}" title="${inactive ? 'Inactiu (desmarcat en crear partit) - toca per activar' : 'Actiu - toca per marcar inactiu'}" onclick="togglePlayerActive(${p.id})">${inactive ? '&#128683;' : '&#128065;'}</button>
       <div class="btn-group btn-group-sm">
         <button class="btn btn-outline-primary" onclick="editPlayer(${p.id})">&#9998;</button>
         <button class="btn btn-outline-danger" onclick="deletePlayer(${p.id})">&#128465;</button>
@@ -500,6 +542,14 @@ async function renderPlayers() {
     </li>`;
   }).join('');
   updatePlayersSel();
+}
+
+async function togglePlayerActive(id) {
+  const p = await DB.get('players', id);
+  if (!p) return;
+  p.active = p.active === false ? true : false;
+  await DB.put('players', p);
+  renderPlayers();
 }
 
 function togglePlayerSelection(id) {
@@ -677,9 +727,9 @@ function renderGamePlayers(teamId, players) {
     return;
   }
   container.innerHTML = teamPlayers.map(p => `
-    <div class="form-check">
-      <input class="form-check-input" type="checkbox" value="${p.id}" id="psel${p.id}" checked>
-      <label class="form-check-label" for="psel${p.id}">${p.number ? '#' + p.number + ' ' : ''}${esc(p.name)}</label>
+    <div class="form-check${p.active === false ? ' opacity-50' : ''}">
+      <input class="form-check-input" type="checkbox" value="${p.id}" id="psel${p.id}" ${p.active === false ? '' : 'checked'}>
+      <label class="form-check-label" for="psel${p.id}">${p.number ? '#' + p.number + ' ' : ''}${esc(p.name)}${p.active === false ? ' <small class="text-secondary">(inactiu)</small>' : ''}</label>
     </div>
   `).join('');
 }
@@ -1224,7 +1274,7 @@ async function renderHistory() {
     return `
       <li class="list-group-item list-group-item-action d-flex align-items-center justify-content-between px-2 py-2 game-item" data-game-id="${g.id}">
         <input type="checkbox" class="form-check-input game-select me-2" data-game-id="${g.id}" ${gameSelection.has(g.id) ? 'checked' : ''} onclick="event.stopPropagation(); toggleGameSelection(${g.id})">
-        <div>
+        <div class="flex-grow-1 me-2 text-start">
           <div class="fw-semibold">${esc(g.team)} <span class="game-score">${pts}</span> - ${rPts} ${esc(g.opponent)} ${status}</div>
           <div class="small text-secondary">${dateStr} &middot; ${periodsDesc(g)}${g.type ? ` &middot; ${esc(g.type)}` : ''}</div>
         </div>
@@ -1311,10 +1361,33 @@ async function handleGamesImport(event) {
     const data = JSON.parse(text);
     if (data.type !== 'bqstats-games' || !Array.isArray(data.games)) throw new Error('Aquest fitxer no és un export de partits');
 
-    if (!confirm(`Importar ${data.games.length} partits, ${(data.stats || []).length} registres estadístics i ${(data.players || []).length} jugadors?`)) return;
-
+    const existingGames = await DB.getAll('games');
     const existingTeams = await DB.getAll('teams');
     const existingPlayers = await DB.getAll('players');
+    const dayOf = d => (d || '').slice(0, 10);
+    const gameKey = g => `${dayOf(g.date)}|${String(g.opponent || '').trim().toLowerCase()}`;
+    const known = new Set(existingGames.map(gameKey));
+    const newGames = [];
+    const skipped = new Set();
+    data.games.forEach(g => {
+      if (known.has(gameKey(g))) skipped.add(g.id);
+      else { known.add(gameKey(g)); newGames.push(g); }
+    });
+    const newGameIds = new Set(newGames.map(g => g.id));
+    const newStats = (data.stats || []).filter(s => newGameIds.has(s.gameId));
+    const teamNameById = {};
+    existingTeams.forEach(t => teamNameById[t.id] = (t.name || ''));
+    const countPlayerKey = p => (p.name || '').trim().toLowerCase() + '#' + (teamNameById[p.teamId] || '').trim().toLowerCase();
+    const existingPlayerKeys = new Set(existingPlayers.map(p => countPlayerKey(p)));
+    const newPlayersCount = (data.players || []).filter(p => !existingPlayerKeys.has(countPlayerKey(p))).length;
+
+    const dupMsg = skipped.size ? `\n(${skipped.size} partits ja existents s'ometran)` : '';
+    if (newGames.length === 0) {
+      alert('No hi ha partits nous per importar (ja els tens tots).');
+      return;
+    }
+    if (!confirm(`Importar ${newGames.length} partits nous amb ${newStats.length} registres estadístics i ${newPlayersCount} jugadors nous?${dupMsg}`)) return;
+
     const teamNameKey = t => (t.name || '').trim().toLowerCase();
     const teamsByName = {};
     existingTeams.forEach(t => teamsByName[teamNameKey(t)] = t);
@@ -1348,7 +1421,7 @@ async function handleGamesImport(event) {
       }
     }
 
-    for (const g of data.games) {
+    for (const g of newGames) {
       const { id, playerIds, teamId, actions, ...rest } = g;
       const newPlayerIds = (playerIds || []).map(pid => playerIdMap[pid]).filter(pid => pid !== undefined);
       const newTeamId = teamId ? (teamIdMap[teamId] || null) : null;
@@ -1371,10 +1444,9 @@ async function handleGamesImport(event) {
       }
     }
 
-    await migrateTeams();
     gameSelection = new Set();
-    alert('Partits importats correctament!');
-    renderHistory();
+    alert(`Partits importats correctament!${skipped.size ? ` (${skipped.size} partits duplicats ometuts)` : ''}`);
+    location.reload();
   } catch (e) {
     alert('Error: ' + e.message);
   }
@@ -1715,8 +1787,11 @@ async function renderGlobalStats() {
       GAME_TYPES.map(t => `<option value="${t}">${esc(t)}</option>`).join('');
     if (prev !== '' && Array.from(typeSel.options).some(o => o.value === prev)) typeSel.value = prev;
   }
+  populateSeason('statsSeasonFilter', allGames.filter(g => !g.isActive));
   const teamVal = teamSel ? teamSel.value : 'all';
   const typeVal = typeSel ? typeSel.value : 'all';
+  const seasonSel = document.getElementById('statsSeasonFilter');
+  const seasonVal = seasonSel ? seasonSel.value : 'all';
 
   const stats = allStats.filter(s => {
     if (!teamFinishedIds.has(s.gameId)) return false;
@@ -1724,6 +1799,7 @@ async function renderGlobalStats() {
     if (!g) return false;
     if (teamVal !== 'all' && String(g.teamId) !== teamVal) return false;
     if (typeVal !== 'all' && g.type !== typeVal) return false;
+    if (seasonVal !== 'all' && seasonOf(g.date) !== seasonVal) return false;
     return true;
   });
   if (stats.length === 0) {
@@ -1744,121 +1820,451 @@ async function renderGlobalStats() {
     gamesCount[s.playerId]++;
   });
 
-  if (statsMode === 'totals') {
-    let html = '<table class="table table-dark table-striped table-sm stats-table"><thead><tr><th>Jug</th><th>PJ</th>';
-    html += '<th>PTS</th><th>REB</th><th>AST</th>';
-    html += '<th>2PM</th><th>2PI</th><th>2P%</th>';
-    html += '<th>3PM</th><th>3PI</th><th>3P%</th>';
-    html += '<th>TLM</th><th>TLI</th><th>TL%</th>';
-    REST_FIELDS.forEach(f => html += `<th>${STAT_LABELS[f]}</th>`);
-    html += '<th>VAL</th></tr></thead><tbody>';
+  const rows = Object.keys(totals).map(pid => {
+    const t = totals[pid];
+    const p = playerMap[parseInt(pid)];
+    const team = p ? teamMap[p.teamId] : null;
+    const n = gamesCount[pid];
+    const pts = calcScore(t);
+    const val = calcVal(t);
+    const reb = t.oReb + t.dReb;
+    return { pid, team, n, t, pts, val, reb, name: p ? abbrevName(p) : '?', num: p && p.number !== '' && p.number != null ? parseInt(p.number) : null };
+  });
 
-    Object.keys(totals).forEach(pid => {
-      const t = totals[pid];
-      const p = playerMap[parseInt(pid)];
-      const name = p ? abbrevName(p) : '?';
-      const team = p ? teamMap[p.teamId] : null;
-      const pts = calcScore(t);
-      const val = calcVal(t);
-      const reb = t.oReb + t.dReb;
-      html += `<tr><td class="player-name">${esc(name)}${team ? `<br><small style="color:var(--primary)">${esc(team.name)}</small>` : ''}</td><td>${gamesCount[pid]}</td>`;
-      html += `<td>${pts}</td><td>${reb}</td><td>${t.assists}</td>`;
-      html += `<td>${t.twoMade}</td><td>${t.twoMissed}</td><td>${pct(t.twoMade, t.twoMissed)}</td>`;
-      html += `<td>${t.threeMade}</td><td>${t.threeMissed}</td><td>${pct(t.threeMade, t.threeMissed)}</td>`;
-      html += `<td>${t.ftMade}</td><td>${t.ftMissed}</td><td>${pct(t.ftMade, t.ftMissed)}</td>`;
-      REST_FIELDS.forEach(f => html += `<td>${t[f]}</td>`);
-      html += `<td>${val}</td></tr>`;
+  const rowCell = (r) => {
+    const t = r.t;
+    const name = r.name;
+    const team = r.team;
+    if (statsMode === 'totals') {
+      return `<tr><td class="player-name">${esc(name)}${team ? `<br><small style="color:var(--primary)">${esc(team.name)}</small>` : ''}</td><td>${r.n}</td>`
+        + `<td>${r.pts}</td><td>${r.reb}</td><td>${t.assists}</td><td>${r.val}</td>`
+        + `<td>${t.ftMade}/${t.ftMade + t.ftMissed}</td><td>${pct(t.ftMade, t.ftMissed)}</td>`
+        + `<td>${t.twoMade}/${t.twoMade + t.twoMissed}</td><td>${pct(t.twoMade, t.twoMissed)}</td>`
+        + `<td>${t.threeMade}/${t.threeMade + t.threeMissed}</td><td>${pct(t.threeMade, t.threeMissed)}</td>`
+        + REST_FIELDS.map(f => `<td>${t[f]}</td>`).join('')
+        + '</tr>';
+    }
+    const n = r.n;
+    return `<tr><td>${esc(name)}${team ? `<br><small style="color:var(--primary)">${esc(team.name)}</small>` : ''}</td><td>${n}</td>`
+      + `<td>${(r.pts / n).toFixed(1)}</td><td>${(r.reb / n).toFixed(1)}</td><td>${(t.assists / n).toFixed(1)}</td><td>${(r.val / n).toFixed(1)}</td>`
+      + `<td>${(t.ftMade / n).toFixed(1)}/${((t.ftMade + t.ftMissed) / n).toFixed(1)}</td><td>${pct(t.ftMade, t.ftMissed)}</td>`
+      + `<td>${(t.twoMade / n).toFixed(1)}/${((t.twoMade + t.twoMissed) / n).toFixed(1)}</td><td>${pct(t.twoMade, t.twoMissed)}</td>`
+      + `<td>${(t.threeMade / n).toFixed(1)}/${((t.threeMade + t.threeMissed) / n).toFixed(1)}</td><td>${pct(t.threeMade, t.threeMissed)}</td>`
+      + REST_FIELDS.map(f => `<td>${(t[f] / n).toFixed(1)}</td>`).join('')
+      + '</tr>';
+  };
+
+  const numVal = (r, f) => statsMode === 'averages' ? (r.n ? r.t[f] / r.n : 0) : r.t[f];
+  const sortVal = (r, key) => {
+    const avg = v => statsMode === 'averages' ? (r.n ? v / r.n : 0) : v;
+    switch (key) {
+      case 'player': return r.num === null ? '~~~' : String(r.num).padStart(3, '0');
+      case 'pj': return r.n;
+      case 'pts': return avg(r.pts);
+      case 'reb': return avg(r.reb);
+      case 'ast': return avg(r.t.assists);
+      case 'twoPct': return (r.t.twoMade + r.t.twoMissed) ? r.t.twoMade / (r.t.twoMade + r.t.twoMissed) : -1;
+      case 'threePct': return (r.t.threeMade + r.t.threeMissed) ? r.t.threeMade / (r.t.threeMade + r.t.threeMissed) : -1;
+      case 'ftPct': return (r.t.ftMade + r.t.ftMissed) ? r.t.ftMade / (r.t.ftMade + r.t.ftMissed) : -1;
+      case 'val': return avg(r.val);
+      case 'ppt': return r.n ? r.pts / r.n : 0;
+      case 'vpp': return r.n ? r.val / r.n : 0;
+      default: return numVal(r, key);
+    }
+  };
+
+  if (statsSortKey) {
+    rows.sort((a, b) => {
+      const va = sortVal(a, statsSortKey);
+      const vb = sortVal(b, statsSortKey);
+      let c;
+      if (typeof va === 'string') c = va.localeCompare(vb);
+      else c = va < vb ? -1 : va > vb ? 1 : 0;
+      if (c === 0 && statsSortKey === 'player') c = a.name.localeCompare(b.name);
+      return statsSortAsc ? c : -c;
     });
-
-    html += '</tbody></table>';
-    container.innerHTML = html;
-  } else {
-    let html = '<table class="table table-dark table-striped table-sm stats-table"><thead><tr><th>Jug</th><th>PJ</th>';
-    html += '<th>REB</th><th>AST</th>';
-    html += '<th>2PM</th><th>2PI</th><th>2P%</th>';
-    html += '<th>3PM</th><th>3PI</th><th>3P%</th>';
-    html += '<th>TLM</th><th>TLI</th><th>TL%</th>';
-    REST_FIELDS.forEach(f => html += `<th>${STAT_LABELS[f]}</th>`);
-    html += '<th>PPT</th><th>VPP</th></tr></thead><tbody>';
-
-    Object.keys(totals).forEach(pid => {
-      const t = totals[pid];
-      const p = playerMap[parseInt(pid)];
-      const name = p ? abbrevName(p) : '?';
-      const team = p ? teamMap[p.teamId] : null;
-      const n = gamesCount[pid];
-      const pts = calcScore(t);
-      const val = calcVal(t);
-      html += `<tr><td>${esc(name)}${team ? `<br><small style="color:var(--primary)">${esc(team.name)}</small>` : ''}</td><td>${n}</td>`;
-      html += `<td>${((t.oReb + t.dReb) / n).toFixed(1)}</td><td>${(t.assists / n).toFixed(1)}</td>`;
-      html += `<td>${(t.twoMade / n).toFixed(1)}</td><td>${(t.twoMissed / n).toFixed(1)}</td><td>${pct(t.twoMade, t.twoMissed)}</td>`;
-      html += `<td>${(t.threeMade / n).toFixed(1)}</td><td>${(t.threeMissed / n).toFixed(1)}</td><td>${pct(t.threeMade, t.threeMissed)}</td>`;
-      html += `<td>${(t.ftMade / n).toFixed(1)}</td><td>${(t.ftMissed / n).toFixed(1)}</td><td>${pct(t.ftMade, t.ftMissed)}</td>`;
-      REST_FIELDS.forEach(f => html += `<td>${(t[f] / n).toFixed(1)}</td>`);
-      html += `<td>${(pts / n).toFixed(1)}</td>`;
-      html += `<td>${(val / n).toFixed(1)}</td></tr>`;
-    });
-
-    html += '</tbody></table>';
-    container.innerHTML = html;
   }
+
+  const th = (label, key) => `<th class="${statsSortKey === key ? 'sort-active' : ''}" onclick="sortStats('${key}')">${label}${statsSortKey === key ? (statsSortAsc ? ' &#9650;' : ' &#9660;') : ''}</th>` + '\n';
+
+  const headers = th('Jug', 'player') + th('PJ', 'pj') + th('PTS', 'pts') + th('REB', 'reb') + th('AST', 'ast') + th('VAL', 'val')
+    + th('T1', 'ftMade') + th('%T1', 'ftPct')
+    + th('T2', 'twoMade') + th('%T2', 'twoPct')
+    + th('T3', 'threeMade') + th('%T3', 'threePct')
+    + REST_FIELDS.map(f => th(STAT_LABELS[f], f)).join('');
+  container.innerHTML = '<table class="table table-dark table-striped table-sm stats-table"><thead><tr>' + headers
+    + '</tr></thead><tbody>' + rows.map(rowCell).join('') + '</tbody></table>';
 }
 
-// EXPORT / IMPORT
-async function exportData() {
-  const players = await DB.getAll('players');
-  const games = await DB.getAll('games');
-  const stats = await DB.getAll('stats');
+function sortStats(key) {
+  if (statsSortKey === key) statsSortAsc = !statsSortAsc;
+  else { statsSortKey = key; statsSortAsc = true; }
+  renderGlobalStats();
+}
+
+// RECORDS
+let recordsMode = 'game';
+let recordsQuarter = null;
+let recordsGroup = 'player';
+
+function switchRecordsGroup(group) {
+  recordsGroup = group;
+  document.getElementById('tabRecordsPlayer').classList.toggle('active', group === 'player');
+  document.getElementById('tabRecordsTeam').classList.toggle('active', group === 'team');
+  renderRecords();
+}
+
+function switchRecordsMode(mode) {
+  recordsMode = mode;
+  document.getElementById('tabRecordsGame').classList.toggle('active', mode === 'game');
+  document.getElementById('tabRecordsQuarter').classList.toggle('active', mode === 'quarter');
+  renderRecords();
+  renderRecordsQuarters();
+}
+
+async function renderRecordsQuarters() {
+  const el = document.getElementById('recordsQuarters');
+  if (recordsMode !== 'quarter') { el.style.display = 'none'; return; }
+  const teamSel = document.getElementById('recordsTeamFilter');
+  const typeSel = document.getElementById('recordsTypeFilter');
+  const seasonSel = document.getElementById('recordsSeasonFilter');
+  const teamVal = teamSel ? teamSel.value : 'all';
+  const typeVal = typeSel ? typeSel.value : 'all';
+  const seasonVal = seasonSel ? seasonSel.value : 'all';
+  const allGames = await DB.getAll('games');
+  const finished = allGames.filter(g => !g.isActive
+    && (teamVal === 'all' || String(g.teamId) === teamVal)
+    && (typeVal === 'all' || g.type === typeVal)
+    && (seasonVal === 'all' || seasonOf(g.date) === seasonVal));
+  let maxP = 4;
+  finished.forEach(g => (g.actions || []).forEach(a => {
+    const p = a.period || 1;
+    if (p > maxP) maxP = p;
+  }));
+  const qBtn = (label, q) => `<button class="btn btn-sm ${(q === 0 ? recordsQuarter === null : recordsQuarter === q) ? 'btn-primary' : 'btn-outline-secondary'}" onclick="setRecordsQuarter(${q})">${label}</button>`;
+  let html = '<div class="d-flex gap-1 flex-wrap mb-2">';
+  html += qBtn('Tots', 0);
+  html += ['1er', '2n', '3r', '4t'].map((l, i) => qBtn(l, i + 1)).join('');
+  for (let p = 5; p <= maxP; p++) html += qBtn(`Pr${p - 4}`, p);
+  html += '</div>';
+  el.innerHTML = html;
+  el.style.display = '';
+}
+
+function setRecordsQuarter(q) {
+  recordsQuarter = q === 0 ? null : q;
+  renderRecords();
+  renderRecordsQuarters();
+}
+
+async function renderRecords() {
+  const container = document.getElementById('recordsList');
+  const allGames = await DB.getAll('games');
+  const teamSel = document.getElementById('recordsTeamFilter');
+  const typeSel = document.getElementById('recordsTypeFilter');
   const teams = await DB.getAll('teams');
-  const data = { players, games, stats, teams, exportedAt: new Date().toISOString() };
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `basquet-stats-${new Date().toISOString().slice(0, 10)}.json`;
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
-function importData() {
-  document.getElementById('importFile').click();
-}
-
-async function handleImport(event) {
-  const file = event.target.files[0];
-  if (!file) return;
-  try {
-    const text = await file.text();
-    const data = JSON.parse(text);
-    if (!data.players || !data.games || !data.stats) throw new Error('Format invàlid');
-
-    if (!confirm(`Importar ${data.players.length} jugadors, ${data.games.length} partits i ${data.stats.length} registres?`)) return;
-
-    for (const p of data.players) {
-      const { id, ...rest } = p;
-      await DB.add('players', rest);
-    }
-    for (const g of data.games) {
-      const { id, ...rest } = g;
-      await DB.add('games', rest);
-    }
-    for (const s of data.stats) {
-      const { id, ...rest } = s;
-      await DB.add('stats', rest);
-    }
-    if (Array.isArray(data.teams)) {
-      for (const t of data.teams) {
-        const { id, ...rest } = t;
-        await DB.add('teams', rest);
-      }
-    }
-    await migrateTeams();
-    alert('Dades importades correctament!');
-    navigateTo('viewHome');
-  } catch (e) {
-    alert('Error: ' + e.message);
+  if (teamSel) {
+    const prev = teamSel.value;
+    teamSel.innerHTML = `<option value="all">Tots</option>` +
+      teams.map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join('');
+    if (prev !== '' && Array.from(teamSel.options).some(o => o.value === prev)) teamSel.value = prev;
   }
-  event.target.value = '';
+  if (typeSel) {
+    const prev = typeSel.value;
+    typeSel.innerHTML = `<option value="all">Tots</option>` +
+      GAME_TYPES.map(t => `<option value="${t}">${esc(t)}</option>`).join('');
+    if (prev !== '' && Array.from(typeSel.options).some(o => o.value === prev)) typeSel.value = prev;
+  }
+  populateSeason('recordsSeasonFilter', allGames.filter(g => !g.isActive));
+  const teamVal = teamSel ? teamSel.value : 'all';
+  const typeVal = typeSel ? typeSel.value : 'all';
+  const seasonSel = document.getElementById('recordsSeasonFilter');
+  const seasonVal = seasonSel ? seasonSel.value : 'all';
+  const finished = allGames.filter(g => !g.isActive
+    && (teamVal === 'all' || String(g.teamId) === teamVal)
+    && (typeVal === 'all' || g.type === typeVal)
+    && (seasonVal === 'all' || seasonOf(g.date) === seasonVal));
+  const finishedIds = new Set(finished.map(g => g.id));
+  const stats = (await DB.getAll('stats')).filter(s => finishedIds.has(s.gameId));
+  const players = await DB.getAll('players');
+  const pMap = {};
+  players.forEach(p => pMap[p.id] = p);
+  const gameMap = {};
+  finished.forEach(g => gameMap[g.id] = g);
+  const scoreMap = {};
+  stats.forEach(s => {
+    if (!scoreMap[s.gameId]) scoreMap[s.gameId] = emptyStats();
+    Object.keys(scoreMap[s.gameId]).forEach(k => scoreMap[s.gameId][k] += s[k]);
+  });
+  const finalScore = g => {
+    const t = scoreMap[g.id];
+    const rs = (g.rival1pt || 0) + (g.rival2pt || 0) * 2 + (g.rival3pt || 0) * 3;
+    return `${t ? calcScore(t) : 0}-${rs}`;
+  };
+  const groups = { player: [], team: [] };
+  const fmtDate = g => {
+    const d = new Date(g.date || g.timestamp);
+    return d.toLocaleDateString('ca-ES', { day: 'numeric', month: 'short', year: 'numeric' });
+  };
+  const dateSub = g => `${fmtDate(g)} &middot; ${esc(g.team)} - ${esc(g.opponent)}${g.type ? ` &middot; ${esc(g.type)}` : ''} (${finalScore(g)})`;
+  const playerSub = (pid, g) => `${esc(playerLabel(pMap[pid]))} &middot; ${dateSub(g)}`;
+
+  const isBadRec = label => /fallats|Perdudes|Taps rebuts|Punts rebuts|Faltes fetes/.test(label);
+
+  const addRow = (group, label, value, sub) => groups[group].push(`<li class="list-group-item d-flex align-items-center gap-2 px-2 py-2">
+      <span class="fw-semibold" style="flex:none;width:150px">${label}</span>
+      <span class="badge ${isBadRec(label) ? 'bg-danger' : 'bg-success'} text-nowrap" style="flex:none;width:56px;text-align:center">${value}</span>
+      <span class="small text-secondary" style="flex:1;min-width:0">${sub}</span>
+    </li>`);
+
+  if (stats.length === 0) {
+    container.innerHTML = '<div class="text-center text-secondary py-4">&#127942;<br>No hi ha records encara</div>';
+    return;
+  }
+
+  if (recordsMode === 'game') {
+    const allIndiv = (label, keyFn) => {
+      let max = null;
+      stats.forEach(s => {
+        const v = keyFn(s);
+        if (max === null || v > max) max = v;
+      });
+      if (max === null) return;
+      const who = stats
+        .filter(s => keyFn(s) === max)
+        .map(s => playerSub(s.playerId, gameMap[s.gameId]));
+      addRow('player', label, max, who.join('<br>'));
+    };
+    allIndiv('Punts', s => calcScore(s));
+    allIndiv('Rebots totals', s => s.oReb + s.dReb);
+    allIndiv('Rebots ofensius', s => s.oReb);
+    allIndiv('Rebots defensius', s => s.dReb);
+    allIndiv('Assistències', s => s.assists);
+    allIndiv('Taps', s => s.blocks);
+    allIndiv('Taps rebuts', s => s.blocksAgainst);
+    allIndiv('Recuperacions', s => s.steals);
+    allIndiv('Perdudes', s => s.turnovers);
+    allIndiv('Faltes fetes', s => s.pFouls);
+    allIndiv('Faltes rebudes', s => s.foulsReceived);
+    allIndiv('Triples ficats', s => s.threeMade);
+    allIndiv('Triples intentats', s => s.threeMissed);
+    allIndiv('Triples fallats', s => s.threeMissed - s.threeMade);
+    allIndiv('Tirs de 2 ficats', s => s.twoMade);
+    allIndiv('Tirs de 2 intentats', s => s.twoMissed);
+    allIndiv('Tirs de 2 fallats', s => s.twoMissed - s.twoMade);
+    allIndiv('Tirs de camp ficats', s => s.twoMade + s.threeMade);
+    allIndiv('Tirs de camp intentats', s => s.twoMissed + s.threeMissed);
+    allIndiv('Tirs de camp fallats', s => (s.twoMissed - s.twoMade) + (s.threeMissed - s.threeMade));
+    allIndiv('Tirs lliures ficats', s => s.ftMade);
+    allIndiv('Tirs lliures intentats', s => s.ftMissed);
+    allIndiv('Tirs lliures fallats', s => s.ftMissed - s.ftMade);
+    allIndiv('Valoració', s => calcVal(s));
+
+    const ddMap = {};
+    finished.forEach(g => {
+      const per = {};
+      stats.filter(s => s.gameId === g.id).forEach(s => per[s.playerId] = s);
+      Object.entries(per).forEach(([pid, s]) => {
+        const cats = [calcScore(s), s.oReb + s.dReb, s.assists].filter(v => v >= 10).length;
+        if (!ddMap[pid]) ddMap[pid] = { dd: [], td: [] };
+        if (cats >= 3) ddMap[pid].td.push(g.id);
+        else if (cats === 2) ddMap[pid].dd.push(g.id);
+      });
+    });
+    const countRows = (label, key) => {
+      const matches = Object.entries(ddMap)
+        .map(([pid, c]) => ({ pid, n: c[key].length }))
+        .filter(x => x.n > 0)
+        .sort((a, b) => b.n - a.n);
+      if (matches.length) {
+        const who = matches.map(m => `${esc(playerLabel(pMap[m.pid]))} (${m.n})`);
+        addRow('player', label, matches[0].n, who.join('<br>'));
+      } else {
+        addRow('player', label, 0, '&mdash;');
+      }
+    };
+    countRows('Dobles-dobles', 'dd');
+    countRows('Triples-dobles', 'td');
+
+    const teamRec = (label, keyFn, isMin) => {
+      let best = null;
+      Object.entries(scoreMap).forEach(([gid, t]) => {
+        const g = gameMap[gid];
+        const rival = (g.rival1pt || 0) + (g.rival2pt || 0) * 2 + (g.rival3pt || 0) * 3;
+        const v = keyFn(t, rival);
+        if (!best || (isMin ? v < best.v : v > best.v)) best = { v, g };
+      });
+      if (best) addRow('team', label, best.v, `${fmtDate(best.g)} &middot; ${esc(best.g.team)} - ${esc(best.g.opponent)}${best.g.type ? ` &middot; ${esc(best.g.type)}` : ''} (${finalScore(best.g)})`);
+    };
+    teamRec('Punts', t => calcScore(t));
+    teamRec('Punts rebuts', (t, rival) => rival);
+    teamRec('Rebots totals', t => t.oReb + t.dReb);
+    teamRec('Rebots ofensius', t => t.oReb);
+    teamRec('Rebots defensius', t => t.dReb);
+    teamRec('Assistències', t => t.assists);
+    teamRec('Taps', t => t.blocks);
+    teamRec('Taps rebuts', t => t.blocksAgainst);
+    teamRec('Recuperacions', t => t.steals);
+    teamRec('Perdudes', t => t.turnovers);
+    teamRec('Faltes fetes', t => t.pFouls);
+    teamRec('Faltes rebudes', t => t.foulsReceived);
+    teamRec('Triples ficats', t => t.threeMade);
+    teamRec('Triples intentats', t => t.threeMissed);
+    teamRec('Triples fallats', t => t.threeMissed - t.threeMade);
+    teamRec('Tirs de 2 ficats', t => t.twoMade);
+    teamRec('Tirs de 2 intentats', t => t.twoMissed);
+    teamRec('Tirs de 2 fallats', t => t.twoMissed - t.twoMade);
+    teamRec('Tirs de camp ficats', t => t.twoMade + t.threeMade);
+    teamRec('Tirs de camp intentats', t => t.twoMissed + t.threeMissed);
+    teamRec('Tirs de camp fallats', t => (t.twoMissed - t.twoMade) + (t.threeMissed - t.threeMade));
+    teamRec('Tirs lliures ficats', t => t.ftMade);
+    teamRec('Tirs lliures intentats', t => t.ftMissed);
+    teamRec('Tirs lliures fallats', t => t.ftMissed - t.ftMade);
+    teamRec('Marge de victòria', (t, rival) => calcScore(t) - rival);
+    teamRec('Menys punts encaixats', (t, rival) => rival, true);
+    teamRec('Punts combinats', (t, rival) => calcScore(t) + rival);
+  } else {
+    const quads = [];
+    const qSub = (g, q) => `${periodLabel(q, g.periods)} &middot; ${fmtDate(g)} &middot; ${esc(g.team)} - ${esc(g.opponent)}${g.type ? ` &middot; ${esc(g.type)}` : ''} (${finalScore(g)})`;
+    finished.forEach(g => {
+      const per = {};
+      (g.actions || []).forEach(a => {
+        if (a.type === 'sub' || a.type === 'addPlayer') return;
+        const q = a.period || 1;
+        if (!per[q]) per[q] = { teamPts: 0, rivalPts: 0, players: {} };
+        const p = per[q];
+        if (a.playerId === -1) { p.rivalPts += parseInt(a.text) || 0; return; }
+        if (!p.players[a.playerId]) p.players[a.playerId] = { pts: 0, oReb: 0, dReb: 0, ast: 0, t3: 0, tw: 0, a2: 0, a3: 0, t1: 0, a1: 0, to: 0, fr: 0, pf: 0, ba: 0, bl: 0, st: 0 };
+        const pl = p.players[a.playerId];
+        (a.fields || []).forEach(f => {
+          if (f === 'twoMade' && !a.fields.includes('threeMade')) { p.teamPts += 2; pl.pts += 2; pl.tw += 1; }
+          else if (f === 'threeMade') { p.teamPts += 3; pl.pts += 3; pl.t3 += 1; }
+          else if (f === 'ftMade') { p.teamPts += 1; pl.pts += 1; pl.t1 += 1; }
+          else if (f === 'oReb') pl.oReb += 1;
+          else if (f === 'dReb') pl.dReb += 1;
+          else if (f === 'assists') pl.ast += 1;
+          else if (f === 'twoMissed') pl.a2 += 1;
+          else if (f === 'threeMissed') pl.a3 += 1;
+          else if (f === 'ftMissed') pl.a1 += 1;
+          else if (f === 'turnovers') pl.to += 1;
+          else if (f === 'pFouls') pl.pf += 1;
+          else if (f === 'foulsReceived') pl.fr += 1;
+          else if (f === 'blocksAgainst') pl.ba += 1;
+          else if (f === 'blocks') pl.bl += 1;
+          else if (f === 'steals') pl.st += 1;
+        });
+      });
+      Object.entries(per).forEach(([q, p]) => {
+        if (recordsQuarter !== null && parseInt(q) !== recordsQuarter) return;
+        const qi = parseInt(q);
+        const players = Object.entries(p.players).map(([pid, pl]) => ({
+          pid: parseInt(pid), ...pl,
+          val: pl.pts + (pl.oReb + pl.dReb) + pl.ast + pl.bl + pl.st + pl.fr + pl.t1 + pl.tw + pl.t3
+            - (pl.a2 + pl.a3 + pl.a1) - pl.to - pl.ba
+        }));
+        const sum = f => players.reduce((acc, pl) => acc + pl[f], 0);
+        quads.push({
+          g, q: qi, teamPts: p.teamPts, rivalPts: p.rivalPts,
+          total: p.teamPts + p.rivalPts, marge: p.teamPts - p.rivalPts,
+          rebT: sum('oReb') + sum('dReb'), rebO: sum('oReb'), rebD: sum('dReb'),
+          ast: sum('ast'), bl: sum('bl'), ba: sum('ba'), st: sum('st'),
+          to: sum('to'), pf: sum('pf'), fr: sum('fr'),
+          tw: sum('tw'), t3: sum('t3'), t1: sum('t1'), a2: sum('a2'), a3: sum('a3'), a1: sum('a1')
+        });
+        players.forEach(pl => quads.push({ g, q: qi, ...pl }));
+      });
+    });
+    const bestQ = (label, keyFn, group) => {
+      let max = null;
+      quads.forEach(x => {
+        const v = keyFn(x);
+        if (v !== undefined && (max === null || v > max)) max = v;
+      });
+      if (max === null) return;
+      const subOf = x => x.pid !== undefined
+        ? `${esc(playerLabel(pMap[x.pid]))} &middot; ${qSub(x.g, x.q)}`
+        : qSub(x.g, x.q);
+      const who = quads.filter(x => keyFn(x) === max).map(subOf);
+      addRow(group, label, max, who.join('<br>'));
+    };
+    bestQ('Punts', x => x.pid !== undefined ? x.pts : undefined, 'player');
+    bestQ('Rebots totals', x => x.pid !== undefined ? x.oReb + x.dReb : undefined, 'player');
+    bestQ('Rebots ofensius', x => x.pid !== undefined ? x.oReb : undefined, 'player');
+    bestQ('Rebots defensius', x => x.pid !== undefined ? x.dReb : undefined, 'player');
+    bestQ('Assistències', x => x.pid !== undefined ? x.ast : undefined, 'player');
+    bestQ('Taps', x => x.pid !== undefined ? x.bl : undefined, 'player');
+    bestQ('Taps rebuts', x => x.pid !== undefined ? x.ba : undefined, 'player');
+    bestQ('Recuperacions', x => x.pid !== undefined ? x.st : undefined, 'player');
+    bestQ('Perdudes', x => x.pid !== undefined ? x.to : undefined, 'player');
+    bestQ('Faltes fetes', x => x.pid !== undefined ? x.pf : undefined, 'player');
+    bestQ('Faltes rebudes', x => x.pid !== undefined ? x.fr : undefined, 'player');
+    bestQ('Triples ficats', x => x.pid !== undefined ? x.t3 : undefined, 'player');
+    bestQ('Triples intentats', x => x.pid !== undefined ? x.a3 : undefined, 'player');
+    bestQ('Triples fallats', x => x.pid !== undefined ? x.a3 - x.t3 : undefined, 'player');
+    bestQ('Tirs de 2 ficats', x => x.pid !== undefined ? x.tw : undefined, 'player');
+    bestQ('Tirs de 2 intentats', x => x.pid !== undefined ? x.a2 : undefined, 'player');
+    bestQ('Tirs de 2 fallats', x => x.pid !== undefined ? x.a2 - x.tw : undefined, 'player');
+    bestQ('Tirs de camp ficats', x => x.pid !== undefined ? x.tw + x.t3 : undefined, 'player');
+    bestQ('Tirs de camp intentats', x => x.pid !== undefined ? x.a2 + x.a3 : undefined, 'player');
+    bestQ('Tirs de camp fallats', x => x.pid !== undefined ? (x.a2 + x.a3) - (x.tw + x.t3) : undefined, 'player');
+    bestQ('Tirs lliures ficats', x => x.pid !== undefined ? x.t1 : undefined, 'player');
+    bestQ('Tirs lliures intentats', x => x.pid !== undefined ? x.a1 : undefined, 'player');
+    bestQ('Tirs lliures fallats', x => x.pid !== undefined ? x.a1 - x.t1 : undefined, 'player');
+    bestQ('Valoració', x => x.pid !== undefined ? x.val : undefined, 'player');
+    bestQ('Punts', x => x.pid === undefined ? x.teamPts : undefined, 'team');
+    bestQ('Punts rebuts', x => x.pid === undefined ? x.rivalPts : undefined, 'team');
+    bestQ('Rebots totals', x => x.pid === undefined ? x.rebT : undefined, 'team');
+    bestQ('Rebots ofensius', x => x.pid === undefined ? x.rebO : undefined, 'team');
+    bestQ('Rebots defensius', x => x.pid === undefined ? x.rebD : undefined, 'team');
+    bestQ('Assistències', x => x.pid === undefined ? x.ast : undefined, 'team');
+    bestQ('Taps', x => x.pid === undefined ? x.bl : undefined, 'team');
+    bestQ('Taps rebuts', x => x.pid === undefined ? x.ba : undefined, 'team');
+    bestQ('Recuperacions', x => x.pid === undefined ? x.st : undefined, 'team');
+    bestQ('Perdudes', x => x.pid === undefined ? x.to : undefined, 'team');
+    bestQ('Faltes fetes', x => x.pid === undefined ? x.pf : undefined, 'team');
+    bestQ('Faltes rebudes', x => x.pid === undefined ? x.fr : undefined, 'team');
+    bestQ('Triples ficats', x => x.pid === undefined ? x.t3 : undefined, 'team');
+    bestQ('Triples intentats', x => x.pid === undefined ? x.a3 : undefined, 'team');
+    bestQ('Triples fallats', x => x.pid === undefined ? x.a3 - x.t3 : undefined, 'team');
+    bestQ('Tirs de 2 ficats', x => x.pid === undefined ? x.tw : undefined, 'team');
+    bestQ('Tirs de 2 intentats', x => x.pid === undefined ? x.a2 : undefined, 'team');
+    bestQ('Tirs de 2 fallats', x => x.pid === undefined ? x.a2 - x.tw : undefined, 'team');
+    bestQ('Tirs de camp ficats', x => x.pid === undefined ? x.tw + x.t3 : undefined, 'team');
+    bestQ('Tirs de camp intentats', x => x.pid === undefined ? x.a2 + x.a3 : undefined, 'team');
+    bestQ('Tirs de camp fallats', x => x.pid === undefined ? (x.a2 + x.a3) - (x.tw + x.t3) : undefined, 'team');
+    bestQ('Tirs lliures ficats', x => x.pid === undefined ? x.t1 : undefined, 'team');
+    bestQ('Tirs lliures intentats', x => x.pid === undefined ? x.a1 : undefined, 'team');
+    bestQ('Tirs lliures fallats', x => x.pid === undefined ? x.a1 - x.t1 : undefined, 'team');
+    bestQ('Marge de victòria', x => x.pid === undefined ? x.marge : undefined, 'team');
+    const minRival = quads.reduce((acc, x) => (x.pid === undefined && (!acc || x.rivalPts < acc.x.rivalPts)) ? { x } : acc, null);
+    if (minRival) addRow('team', 'Menys punts encaixats', minRival.x.rivalPts, qSub(minRival.x.g, minRival.x.q));
+    bestQ('Punts combinats', x => x.pid === undefined ? x.total : undefined, 'team');
+  }
+
+  const rows = groups[recordsGroup] || [];
+  container.innerHTML = rows.length
+    ? `<ul class="list-group list-group-flush">${rows.join('')}</ul>`
+    : '<div class="text-center text-secondary py-4">&#127942;<br>No hi ha records encara</div>';
+}
+
+async function cleanupDuplicateGames() {
+  const games = (await DB.getAll('games')).sort((a, b) => (a.id || 0) - (b.id || 0));
+  const dayOf = d => (d || '').slice(0, 10);
+  const key = g => `${dayOf(g.date)}|${String(g.opponent || '').trim().toLowerCase()}`;
+  const seen = new Set();
+  const removeIds = [];
+  games.forEach(g => {
+    if (seen.has(key(g))) removeIds.push(g.id);
+    else seen.add(key(g));
+  });
+  if (!removeIds.length) { alert('No hi ha partits duplicats.'); return; }
+  if (!confirm(`S'eliminaran ${removeIds.length} partits duplicats i les seves estadístiques. Continuar?`)) return;
+  const allStats = await DB.getAll('stats');
+  const removeSet = new Set(removeIds);
+  for (const s of allStats) if (removeSet.has(s.gameId)) await DB.delete('stats', s.id);
+  for (const id of removeIds) await DB.delete('games', id);
+  alert(`Eliminats ${removeIds.length} partits duplicats.`);
+  location.reload();
 }
 
 // UTILITY
@@ -1881,7 +2287,6 @@ function flashButton(el) {
 
 // INIT - don't auto-load any game; show all active on home
 (async function init() {
-  await migrateTeams();
   renderHome();
 })();
 

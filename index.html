@@ -21,9 +21,6 @@
 
       <!-- HOME -->
       <section id="viewHome" class="view active">
-        <div class="d-flex justify-content-end mb-1">
-          <button class="btn btn-outline-secondary btn-sm" onclick="navigateTo('viewTeams')">&#9881; Equips</button>
-        </div>
         <div id="homeGrid" class="row g-2">
           <div class="col-6"><button class="btn btn-outline-light w-100 py-4 fs-5" onclick="navigateTo('viewPlayers')">&#128101;<br><small>Jugadors</small></button></div>
           <div class="col-6"><button class="btn btn-outline-light w-100 py-4 fs-5" onclick="navigateTo('viewNewGame')">&#127936;<br><small>Nou Partit</small></button></div>
@@ -34,7 +31,7 @@
 
       <!-- PLAYERS -->
       <section id="viewPlayers" class="view">
-        <div class="input-group mb-1">
+        <div class="input-group mb-1" id="playerAddBox">
           <input type="text" id="playerName" class="form-control" placeholder="Nom del jugador">
           <input type="number" id="playerNumber" class="form-control" placeholder="Num." min="0" max="99" style="max-width:70px">
           <select id="playerTeam" class="form-select" style="max-width:120px"></select>
@@ -164,6 +161,7 @@
           <button class="btn btn-sm btn-outline-primary" onclick="exportGames()">&#11123; Exportar seleccionats</button>
           <button class="btn btn-sm btn-outline-secondary" onclick="importGames()">&#10515; Importar partits</button>
           <input type="file" id="gameImportFile" accept=".json" style="display:none" onchange="handleGamesImport(event)">
+          <button class="btn btn-sm btn-outline-danger" onclick="cleanupDuplicateGames()">Netejar duplicats</button>
         </div>
         <ul id="gameList" class="list-group list-group-flush"></ul>
       </section>
@@ -188,17 +186,38 @@
             <button class="btn btn-outline-primary active" id="tabTotals" onclick="switchStatsTab('totals')">Totals</button>
             <button class="btn btn-outline-primary" id="tabAverages" onclick="switchStatsTab('averages')">Mitjanes</button>
           </div>
-          <button class="btn btn-sm btn-outline-secondary ms-auto" onclick="exportData()">Exportar Dades</button>
-          <button class="btn btn-sm btn-outline-danger" onclick="importData()">Importar Dades</button>
-          <input type="file" id="importFile" accept=".json" style="display:none" onchange="handleImport(event)">
         </div>
-        <div class="d-flex align-items-center gap-2 mb-2 flex-wrap">
+        <div class="d-flex align-items-center gap-2 mb-2">
           <label class="small text-secondary mb-0 text-nowrap">Equip:</label>
-          <select id="statsTeamFilter" class="form-select form-select-sm flex-grow-1" onchange="renderGlobalStats()"></select>
+          <select id="statsTeamFilter" class="form-select form-select-sm" style="flex:1;min-width:0" onchange="renderGlobalStats()"></select>
           <label class="small text-secondary mb-0 text-nowrap">Competició:</label>
-          <select id="statsTypeFilter" class="form-select form-select-sm flex-grow-1" onchange="renderGlobalStats()"></select>
+          <select id="statsTypeFilter" class="form-select form-select-sm" style="flex:1;min-width:0" onchange="renderGlobalStats()"></select>
+          <label class="small text-secondary mb-0 text-nowrap" title="Temporada">Temp.:</label>
+          <select id="statsSeasonFilter" class="form-select form-select-sm" style="flex:1;min-width:0" onchange="renderGlobalStats()"></select>
         </div>
         <div id="globalStats"></div>
+      </section>
+
+      <!-- RECORDS -->
+      <section id="viewRecords" class="view">
+        <div class="d-flex align-items-center gap-2 mb-2">
+          <label class="small text-secondary mb-0 text-nowrap">Equip:</label>
+          <select id="recordsTeamFilter" class="form-select form-select-sm" style="flex:1;min-width:0" onchange="renderRecords()"></select>
+          <label class="small text-secondary mb-0 text-nowrap">Competició:</label>
+          <select id="recordsTypeFilter" class="form-select form-select-sm" style="flex:1;min-width:0" onchange="renderRecords()"></select>
+          <label class="small text-secondary mb-0 text-nowrap" title="Temporada">Temp.:</label>
+          <select id="recordsSeasonFilter" class="form-select form-select-sm" style="flex:1;min-width:0" onchange="renderRecords()"></select>
+        </div>
+        <div class="btn-group btn-group-sm d-flex mb-2">
+          <button class="btn btn-outline-primary active" id="tabRecordsGame" onclick="switchRecordsMode('game')">Partit</button>
+          <button class="btn btn-outline-primary" id="tabRecordsQuarter" onclick="switchRecordsMode('quarter')">Quart</button>
+        </div>
+        <div class="btn-group btn-group-sm d-flex mb-2">
+          <button class="btn btn-outline-success active" id="tabRecordsPlayer" onclick="switchRecordsGroup('player')">Jugador</button>
+          <button class="btn btn-outline-success" id="tabRecordsTeam" onclick="switchRecordsGroup('team')">Equip</button>
+        </div>
+        <div id="recordsQuarters" style="display:none"></div>
+        <div id="recordsList"></div>
       </section>
 
     </main>
@@ -219,7 +238,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
   <script src="db.js"></script>
-  <script src="app.js?v=26"></script>
+  <script src="app.js?v=30"></script>
   <script>
     try {
       if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
