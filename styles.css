@@ -64,6 +64,7 @@ body { background: #1a1a2e; color: #e0e0e0; }
 .log-player { color: var(--primary); font-weight: 600; }
 .log-rival { color: var(--danger); font-weight: 700; }
 .log-action { color: #aaa; }
+.log-cum { color: var(--primary); font-weight: 600; font-size: 0.75rem; margin-left: 4px; }
 .log-score { color: var(--primary); font-size: 0.7rem; margin-left: 4px; }
 
 /* chat log */

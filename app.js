@@ -423,20 +423,26 @@ async function renderPlayers() {
   teams.forEach(t => teamMap[t.id] = t);
   const teamSel = document.getElementById('playerTeam');
   if (teamSel) {
+    const prevTeam = teamSel.value;
     teamSel.innerHTML = teams.map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join('') ||
       `<option value="">Sense equip</option>`;
+    if (prevTeam !== '' && Array.from(teamSel.options).some(o => o.value === prevTeam)) teamSel.value = prevTeam;
   }
   const filterSel = document.getElementById('playerTeamFilter');
   if (filterSel) {
+    const prevFilter = filterSel.value;
     filterSel.innerHTML = `<option value="all">Tots</option>` +
       teams.map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join('') ||
       `<option value="all">Sense equip</option>`;
-    if (!filterSel.value) filterSel.value = 'all';
+    filterSel.value = (prevFilter !== '' && Array.from(filterSel.options).some(o => o.value === prevFilter))
+      ? prevFilter : 'all';
   }
   const bulkSel = document.getElementById('bulkTeamSelect');
   if (bulkSel) {
+    const prevBulk = bulkSel.value;
     bulkSel.innerHTML = `<option value="">Sense equip</option>` +
       teams.map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join('');
+    if (prevBulk !== '' && Array.from(bulkSel.options).some(o => o.value === prevBulk)) bulkSel.value = prevBulk;
   }
   if (players.length === 0) {
     list.innerHTML = '<div class="text-center text-secondary py-4">&#128101;<br>Cap jugador encara</div>';
@@ -741,19 +747,29 @@ async function renderLiveGame() {
 
   const court = ensureOnCourt();
 
+  const numOfP = p => (p && p.number !== '' && p.number != null) ? parseInt(p.number) : null;
+  const sortedCourt = court.slice().sort((a, b) => {
+    const an = numOfP(playerMap[a]);
+    const bn = numOfP(playerMap[b]);
+    if (an === null && bn === null) return 0;
+    if (an === null) return 1;
+    if (bn === null) return -1;
+    return an - bn;
+  });
+
   const tabs = document.getElementById('liveTabs');
-  tabs.innerHTML = court.map(pid => {
+  tabs.innerHTML = sortedCourt.map(pid => {
     const p = playerMap[pid];
     const label = playerLabel(p);
-    return `<button class="btn btn-outline-secondary player-tab" onclick="selectPlayerTab(${pid})">${esc(label)}</button>`;
+    return `<button class="btn btn-outline-secondary player-tab" data-pid="${pid}" onclick="selectPlayerTab(${pid})">${esc(label)}</button>`;
   }).join('');
 
-  if (!court.includes(currentPlayerTab)) {
-    currentPlayerTab = court[0] || null;
+  if (!sortedCourt.includes(currentPlayerTab)) {
+    currentPlayerTab = sortedCourt[0] || null;
   }
-  const tabIdx = court.indexOf(currentPlayerTab);
   const allTabs = tabs.querySelectorAll('.player-tab');
-  if (allTabs[tabIdx]) allTabs[tabIdx].classList.add('active');
+  const activeBtn = Array.from(allTabs).find(b => b.dataset.pid === String(currentPlayerTab));
+  if (activeBtn) activeBtn.classList.add('active');
 
   document.getElementById('btnSubstitute').style.display = isEditing ? 'none' : '';
 
@@ -779,9 +795,8 @@ async function renderLiveGame() {
 function selectPlayerTab(pid) {
   currentPlayerTab = pid;
   document.querySelectorAll('.player-tab').forEach(t => t.classList.remove('active'));
-  const tabs = document.querySelectorAll('.player-tab');
-  const idx = onCourtIds().indexOf(pid);
-  if (tabs[idx]) tabs[idx].classList.add('active');
+  const btn = Array.from(document.querySelectorAll('#liveTabs .player-tab')).find(b => b.dataset.pid === String(pid));
+  if (btn) btn.classList.add('active');
 }
 
 async function renderLiveStats(playerMap) {
@@ -834,9 +849,9 @@ async function renderLiveStats(playerMap) {
     const reb = s.oReb + s.dReb;
     html += `<tr><td class="player-name">${esc(name)}</td>`;
     html += `<td>${pts}</td><td>${reb}</td><td>${s.assists}</td>`;
+    html += `<td>${s.ftMade}/${s.ftMissed}</td><td>${pct(s.ftMade, s.ftMissed)}</td>`;
     html += `<td>${s.twoMade}/${s.twoMissed}</td><td>${pct(s.twoMade, s.twoMissed)}</td>`;
     html += `<td>${s.threeMade}/${s.threeMissed}</td><td>${pct(s.threeMade, s.threeMissed)}</td>`;
-    html += `<td>${s.ftMade}/${s.ftMissed}</td><td>${pct(s.ftMade, s.ftMissed)}</td>`;
     REST_FIELDS.forEach(f => html += `<td>${s[f]}</td>`);
     html += `<td class="${val >= 0 ? 'val-pos' : 'val-neg'}">${val}</td></tr>`;
     REST_FIELDS.forEach(f => totalRow[f] += s[f]);
@@ -851,9 +866,9 @@ async function renderLiveStats(playerMap) {
   const totalReb = totalRow.oReb + totalRow.dReb;
   html += `<tr class="total-row"><td class="player-name">TOTAL</td>`;
   html += `<td>${totalPts}</td><td>${totalReb}</td><td>${totalRow.assists}</td>`;
+  html += `<td>${totalRow.ftMade}/${totalRow.ftMissed}</td><td>${pct(totalRow.ftMade, totalRow.ftMissed)}</td>`;
   html += `<td>${totalRow.twoMade}/${totalRow.twoMissed}</td><td>${pct(totalRow.twoMade, totalRow.twoMissed)}</td>`;
   html += `<td>${totalRow.threeMade}/${totalRow.threeMissed}</td><td>${pct(totalRow.threeMade, totalRow.threeMissed)}</td>`;
-  html += `<td>${totalRow.ftMade}/${totalRow.ftMissed}</td><td>${pct(totalRow.ftMade, totalRow.ftMissed)}</td>`;
   REST_FIELDS.forEach(f => html += `<td>${totalRow[f]}</td>`);
   html += `<td class="${totalVal >= 0 ? 'val-pos' : 'val-neg'}">${totalVal}</td></tr>`;
 
@@ -995,8 +1010,34 @@ async function renderActionLog() {
   players.forEach(p => pMap[p.id] = p);
 
   const max = Math.min(actionLog.length, 50);
+  const start = actionLog.length - max;
+  const running = {};
+  const cumAt = {};
+  const SHOT_LABELS = { twoMade: 'T2', twoMissed: 'T2', threeMade: 'T3', threeMissed: 'T3', ftMade: 'T1', ftMissed: 'T1' };
+  for (let i = 0; i < actionLog.length; i++) {
+    const entry = actionLog[i];
+    if (entry.playerId !== undefined && entry.playerId !== -1) {
+      if (!running[entry.playerId]) running[entry.playerId] = emptyStats();
+      const st = running[entry.playerId];
+      (entry.fields || []).forEach(f => { if (f in st) st[f]++; });
+      cumAt[i] = { ...st };
+    }
+  }
+  const fmtCum = (i) => {
+    const entry = actionLog[i];
+    const f0 = entry.fields && entry.fields[0];
+    const cum = cumAt[i];
+    if (!f0 || !cum) return '';
+    const label = SHOT_LABELS[f0];
+    if (label) {
+      const made = label === 'T2' ? cum.twoMade : label === 'T3' ? cum.threeMade : cum.ftMade;
+      const missed = label === 'T2' ? cum.twoMissed : label === 'T3' ? cum.threeMissed : cum.ftMissed;
+      return ` (${made}/${missed} ${label})`;
+    }
+    return ` (${cum[f0]} ${STAT_LABELS[f0] || f0})`;
+  };
   let html = '';
-  for (let i = actionLog.length - 1; i >= actionLog.length - max; i--) {
+  for (let i = actionLog.length - 1; i >= start; i--) {
     const entry = actionLog[i];
     const qStr = entry.period ? `Q${entry.period}` : '';
     const scoreStr = (entry.teamScore !== undefined && entry.rivalScore !== undefined) ? `${entry.teamScore}-${entry.rivalScore}` : '';
@@ -1015,13 +1056,13 @@ async function renderActionLog() {
       continue;
     }
     const p = pMap[entry.playerId];
-    const actionText = entry.text || entry.fields.map(f => STAT_NAMES[f] || f).join(' + ');
+    const actionText = entry.text || (entry.fields || []).map(f => STAT_NAMES[f] || f).join(' + ');
     if (entry.playerId === -1) {
       html += `<div class="log-entry">${qStr ? `<span class="log-q">${qStr}</span>` : ''}<span class="log-rival">${esc(actionText)}</span>${scoreStr ? ` <span class="log-score">${scoreStr}</span>` : ''}</div>`;
       continue;
     }
     const label = p ? abbrevName(p) : '#' + entry.playerId;
-    html += `<div class="log-entry">${qStr ? `<span class="log-q">${qStr}</span>` : ''}<span class="log-player">${esc(label)}</span> <span class="log-action">${esc(actionText)}</span>${scoreStr ? ` <span class="log-score">${scoreStr}</span>` : ''}</div>`;
+    html += `<div class="log-entry">${qStr ? `<span class="log-q">${qStr}</span>` : ''}<span class="log-player">${esc(label)}</span> <span class="log-action">${esc(actionText)}</span><span class="log-cum">${fmtCum(i)}</span>${scoreStr ? ` <span class="log-score">${scoreStr}</span>` : ''}</div>`;
   }
   container.innerHTML = html || '<div class="log-entry text-secondary">Cap acció encara</div>';
   container.scrollTop = 0;
@@ -1302,6 +1343,17 @@ function renderDetailPlays(game, playerMap, homeSide) {
     const qStr = a.period ? (a.period <= periods ? `Q${a.period}` : `P${a.period - periods}`) : '?';
     const scoreStr = (a.teamScore !== undefined && a.rivalScore !== undefined) ? `${a.teamScore} - ${a.rivalScore}` : '';
 
+    if (a.type === 'addPlayer') {
+      const p = playerMap[a.playerId];
+      const label = p ? abbrevName(p) : '#' + a.playerId;
+      html += `<div class="chat-row local">
+        <div class="chat-left"><span class="chat-player">${esc(label)}</span> <span class="chat-action">afegit al partit</span></div>
+        <div class="chat-center"><span class="chat-q">${qStr}</span> <span class="chat-score">${scoreStr}</span></div>
+        <div class="chat-right"></div>
+      </div>`;
+      return;
+    }
+
     if (a.type === 'sub') {
       const pOut = playerMap[a.outId];
       const pIn = playerMap[a.inId];
@@ -1327,7 +1379,7 @@ function renderDetailPlays(game, playerMap, homeSide) {
       // Local action
       const p = playerMap[a.playerId];
       const label = p ? abbrevName(p) : '#' + a.playerId;
-      const texts = a.text || a.fields.map(f => STAT_NAMES[f] || f).join(' + ');
+      const texts = a.text || (a.fields || []).map(f => STAT_NAMES[f] || f).join(' + ') || 'acció';
       html += `<div class="chat-row local">
         <div class="chat-left"><span class="chat-player">${esc(label)}</span> <span class="chat-action">${esc(texts)}</span></div>
         <div class="chat-center"><span class="chat-q">${qStr}</span> <span class="chat-score">${scoreStr}</span></div>
