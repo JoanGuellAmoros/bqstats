@@ -6,7 +6,7 @@
 
 body { background: #1a1a2e; color: #e0e0e0; }
 #app { max-width: 1000px; margin: 0 auto; min-height: 100vh; display: flex; flex-direction: column; }
-#mainContent { flex: 1; overflow-y: auto; padding-bottom: 60px; }
+#mainContent { flex: 1; overflow-y: auto; padding-bottom: 16px; }
 .view { display: none; }
 .view.active { display: block; }
 

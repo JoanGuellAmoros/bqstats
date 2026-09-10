@@ -1,4 +1,4 @@
-const CACHE_NAME = 'basquet-stats-v24';
+const CACHE_NAME = 'basquet-stats-v26';
 const urlsToCache = [
   '/',
   '/index.html',

@@ -8,6 +8,7 @@ let statsVisible = true;
 let editingPlayerId = null;
 let statsMode = 'totals';
 let detailQuarterFilter = null;
+let gameSelection = new Set();
 
 const STAT_LABELS = {
   twoMade: '2PM', twoMissed: '2PI', threeMade: '3PM', threeMissed: '3PI',
@@ -355,7 +356,9 @@ function navigateTo(viewId) {
     case 'viewTeams': renderTeams(); break;
     case 'viewNewGame': renderNewGame(); break;
     case 'viewHistory': renderHistory(); break;
-    case 'viewStats': renderGlobalStats(); break;
+    case 'viewStats':
+      { const t = document.getElementById('statsTeamFilter'); if (t) t.value = 'all'; const c = document.getElementById('statsTypeFilter'); if (c) c.value = 'all'; }
+      renderGlobalStats(); break;
   }
 }
 
@@ -1220,9 +1223,10 @@ async function renderHistory() {
     const rPts = (g.rival1pt || 0) + (g.rival2pt || 0) * 2 + (g.rival3pt || 0) * 3;
     return `
       <li class="list-group-item list-group-item-action d-flex align-items-center justify-content-between px-2 py-2 game-item" data-game-id="${g.id}">
+        <input type="checkbox" class="form-check-input game-select me-2" data-game-id="${g.id}" ${gameSelection.has(g.id) ? 'checked' : ''} onclick="event.stopPropagation(); toggleGameSelection(${g.id})">
         <div>
           <div class="fw-semibold">${esc(g.team)} <span class="game-score">${pts}</span> - ${rPts} ${esc(g.opponent)} ${status}</div>
-          <div class="small text-secondary">${dateStr} &middot; ${periodsDesc(g)}${g.type ? ` &middot; <span class="badge text-bg-secondary">${esc(g.type)}</span>` : ''}</div>
+          <div class="small text-secondary">${dateStr} &middot; ${periodsDesc(g)}${g.type ? ` &middot; ${esc(g.type)}` : ''}</div>
         </div>
         <button class="btn btn-sm btn-outline-danger delete-game-btn" data-game-id="${g.id}">&#128465;</button>
       </li>
@@ -1242,6 +1246,138 @@ async function deleteGame(id) {
     isEditing = false;
   }
   renderHistory();
+}
+
+function toggleGameSelection(id) {
+  if (gameSelection.has(id)) gameSelection.delete(id);
+  else gameSelection.add(id);
+  const cb = document.querySelector(`.game-select[data-game-id="${id}"]`);
+  if (cb) cb.checked = gameSelection.has(id);
+}
+
+function toggleSelectAllGames() {
+  const checked = document.getElementById('gameSelectAll').checked;
+  document.querySelectorAll('.game-select').forEach(cb => {
+    const id = parseInt(cb.dataset.gameId);
+    if (checked) gameSelection.add(id);
+    else gameSelection.delete(id);
+    cb.checked = checked;
+  });
+}
+
+async function exportGames() {
+  if (gameSelection.size === 0) return alert('Selecciona almenys un partit');
+  const allGames = await DB.getAll('games');
+  const allStats = await DB.getAll('stats');
+  const allPlayers = await DB.getAll('players');
+  const allTeams = await DB.getAll('teams');
+  const selIds = Array.from(gameSelection);
+  const games = allGames.filter(g => selIds.includes(g.id));
+  const gameIdSet = new Set(games.map(g => g.id));
+  const pidSet = new Set();
+  const tidSet = new Set();
+  games.forEach(g => {
+    (g.playerIds || []).forEach(pid => pidSet.add(pid));
+    if (g.teamId) tidSet.add(g.teamId);
+  });
+  const data = {
+    type: 'bqstats-games',
+    games,
+    stats: allStats.filter(s => gameIdSet.has(s.gameId)),
+    players: allPlayers.filter(p => pidSet.has(p.id)),
+    teams: allTeams.filter(t => tidSet.has(t.id)),
+    exportedAt: new Date().toISOString()
+  };
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `partits-${new Date().toISOString().slice(0, 10)}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function importGames() {
+  document.getElementById('gameImportFile').click();
+}
+
+async function handleGamesImport(event) {
+  const input = event.target;
+  const file = input.files[0];
+  if (!file) return;
+  input.value = '';
+  try {
+    const text = await file.text();
+    const data = JSON.parse(text);
+    if (data.type !== 'bqstats-games' || !Array.isArray(data.games)) throw new Error('Aquest fitxer no és un export de partits');
+
+    if (!confirm(`Importar ${data.games.length} partits, ${(data.stats || []).length} registres estadístics i ${(data.players || []).length} jugadors?`)) return;
+
+    const existingTeams = await DB.getAll('teams');
+    const existingPlayers = await DB.getAll('players');
+    const teamNameKey = t => (t.name || '').trim().toLowerCase();
+    const teamsByName = {};
+    existingTeams.forEach(t => teamsByName[teamNameKey(t)] = t);
+
+    const teamIdMap = {};
+    for (const t of data.teams || []) {
+      const key = teamNameKey(t);
+      if (teamsByName[key]) {
+        teamIdMap[t.id] = teamsByName[key].id;
+      } else {
+        teamIdMap[t.id] = await DB.add('teams', { name: t.name });
+        teamsByName[key] = { id: teamIdMap[t.id], name: t.name };
+      }
+    }
+
+    const playerKey = p => (p.name || '').trim().toLowerCase() + '#' + ((p.teamId && teamIdMap[p.teamId]) ? teamIdMap[p.teamId] : '');
+    const playersByKey = {};
+    existingPlayers.forEach(p => {
+      playersByKey[(p.name || '').trim().toLowerCase() + '#' + (p.teamId || '')] = p;
+    });
+
+    const playerIdMap = {};
+    for (const p of data.players || []) {
+      const newTeamId = p.teamId ? (teamIdMap[p.teamId] || null) : null;
+      const key = (p.name || '').trim().toLowerCase() + '#' + (newTeamId || '');
+      if (playersByKey[key]) {
+        playerIdMap[p.id] = playersByKey[key].id;
+      } else {
+        playerIdMap[p.id] = await DB.add('players', { name: p.name, number: p.number || '', teamId: newTeamId });
+        playersByKey[key] = { id: playerIdMap[p.id] };
+      }
+    }
+
+    for (const g of data.games) {
+      const { id, playerIds, teamId, actions, ...rest } = g;
+      const newPlayerIds = (playerIds || []).map(pid => playerIdMap[pid]).filter(pid => pid !== undefined);
+      const newTeamId = teamId ? (teamIdMap[teamId] || null) : null;
+      let newActions = actions;
+      if (Array.isArray(actions)) {
+        newActions = actions.map(a => {
+          const na = { ...a };
+          if (na.playerId !== undefined && na.playerId !== -1 && playerIdMap[na.playerId]) na.playerId = playerIdMap[na.playerId];
+          if (na.outId !== undefined && playerIdMap[na.outId]) na.outId = playerIdMap[na.outId];
+          if (na.inId !== undefined && playerIdMap[na.inId]) na.inId = playerIdMap[na.inId];
+          return na;
+        });
+      }
+      const newGameId = await DB.add('games', { ...rest, playerIds: newPlayerIds, teamId: newTeamId, actions: newActions });
+      for (const s of (data.stats || [])) {
+        if (s.gameId !== g.id) continue;
+        if (playerIdMap[s.playerId] === undefined) continue;
+        const { id, gameId, playerId, ...srest } = s;
+        await DB.add('stats', { ...srest, gameId: newGameId, playerId: playerIdMap[s.playerId] });
+      }
+    }
+
+    await migrateTeams();
+    gameSelection = new Set();
+    alert('Partits importats correctament!');
+    renderHistory();
+  } catch (e) {
+    alert('Error: ' + e.message);
+  }
 }
 
 let cachedDetailGame = null;
@@ -1562,10 +1698,38 @@ async function renderGlobalStats() {
   const teams = await DB.getAll('teams');
   const teamMap = {};
   teams.forEach(t => teamMap[t.id] = t);
+  const gameMap = {};
+  allGames.forEach(g => gameMap[g.id] = g);
 
-  const stats = allStats.filter(s => teamFinishedIds.has(s.gameId));
+  const teamSel = document.getElementById('statsTeamFilter');
+  if (teamSel) {
+    const prev = teamSel.value;
+    teamSel.innerHTML = `<option value="all">Tots</option>` +
+      teams.map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join('');
+    if (prev !== '' && Array.from(teamSel.options).some(o => o.value === prev)) teamSel.value = prev;
+  }
+  const typeSel = document.getElementById('statsTypeFilter');
+  if (typeSel) {
+    const prev = typeSel.value;
+    typeSel.innerHTML = `<option value="all">Tots</option>` +
+      GAME_TYPES.map(t => `<option value="${t}">${esc(t)}</option>`).join('');
+    if (prev !== '' && Array.from(typeSel.options).some(o => o.value === prev)) typeSel.value = prev;
+  }
+  const teamVal = teamSel ? teamSel.value : 'all';
+  const typeVal = typeSel ? typeSel.value : 'all';
+
+  const stats = allStats.filter(s => {
+    if (!teamFinishedIds.has(s.gameId)) return false;
+    const g = gameMap[s.gameId];
+    if (!g) return false;
+    if (teamVal !== 'all' && String(g.teamId) !== teamVal) return false;
+    if (typeVal !== 'all' && g.type !== typeVal) return false;
+    return true;
+  });
   if (stats.length === 0) {
-    container.innerHTML = '<div class="text-center text-secondary py-4">&#128200;<br>No hi ha dades encara</div>';
+    container.innerHTML = allStats.length === 0
+      ? '<div class="text-center text-secondary py-4">&#128200;<br>No hi ha dades encara</div>'
+      : '<div class="text-center text-secondary py-4">&#128200;<br>Cap resultat amb aquests filtres</div>';
     return;
   }
 
