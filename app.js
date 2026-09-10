@@ -1085,8 +1085,8 @@ async function addRivalStat(points) {
   const ts = totalStats();
   const sc = calcScore(ts);
   const rs = calcRivalScore();
-  updateLiveScore();
   actionLog.push({ playerId: -1, fields: [`+${points} rival`], text: `+${points}`, period: activeGame.currentPeriod, teamScore: sc, rivalScore: rs });
+  updateLiveScore();
   renderActionLog();
   const btn = document.querySelector(`button[onclick="addRivalStat(${points})"]`);
   if (btn) flashButton(btn);
