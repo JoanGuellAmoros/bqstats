@@ -28,6 +28,8 @@ const REST_FIELDS = ['oReb','dReb','turnovers','steals','blocks','blocksAgainst'
 
 const MADE_AUTO = { twoMade: 'twoMissed', threeMade: 'threeMissed', ftMade: 'ftMissed' };
 
+const GAME_TYPES = ['NBA', 'Lliga Catalana', 'ACB', 'Eurolliga', 'Amistós'];
+
 // TEAMS
 async function migrateTeams() {
   let teams = await DB.getAll('teams');
@@ -54,7 +56,6 @@ function emptyStats() {
 
 function toggleGameSide() {
   const isHome = document.querySelector('input[name="gameSide"]:checked').value === 'local';
-  document.getElementById('gameTeam').placeholder = isHome ? 'Balaguer (Local)' : 'Balaguer (Visitant)';
   document.getElementById('gameOpponent').placeholder = isHome ? 'Nom del rival' : 'Nom del rival (Local)';
 }
 
@@ -236,8 +237,17 @@ async function openSubstitution() {
   const players = await DB.getAll('players');
   const pMap = {};
   players.forEach(p => pMap[p.id] = p);
+  const numOfP = p => (p && p.number !== '' && p.number != null) ? parseInt(p.number) : null;
+  const sortedBench = benchIds.slice().sort((a, b) => {
+    const an = numOfP(pMap[a]);
+    const bn = numOfP(pMap[b]);
+    if (an === null && bn === null) return 0;
+    if (an === null) return 1;
+    if (bn === null) return -1;
+    return an - bn;
+  });
   const html = '<div class="small text-secondary mb-2">Substituir a ' + esc(playerLabel(pMap[outId])) + '</div>' +
-    benchIds.map(pid => `
+    sortedBench.map(pid => `
       <button class="btn btn-outline-light w-100 mb-2 d-flex align-items-center justify-content-between" onclick="doSubstitution(${pid})">
         <span>${esc(playerLabel(pMap[pid]))}</span><span class="badge bg-secondary">BANQUETA</span>
       </button>
@@ -644,18 +654,15 @@ async function renderNewGame() {
   const sel = document.getElementById('gameTeamSelect');
   sel.innerHTML = teams.map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join('');
   const selected = parseInt(sel.value);
-  const team = teams.find(t => t.id === selected);
-  if (team) document.getElementById('gameTeam').value = team.name;
+  const gameDate = document.getElementById('gameDate');
+  if (gameDate) gameDate.value = new Date().toISOString().slice(0, 10);
   renderGamePlayers(selected, players);
 }
 
 async function onGameTeamChange() {
   const players = await DB.getAll('players');
-  const teams = await DB.getAll('teams');
   const sel = document.getElementById('gameTeamSelect');
   const selected = parseInt(sel.value);
-  const team = teams.find(t => t.id === selected);
-  if (team) document.getElementById('gameTeam').value = team.name;
   renderGamePlayers(selected, players);
 }
 
@@ -675,7 +682,12 @@ function renderGamePlayers(teamId, players) {
 }
 
 async function startGame() {
-  const team = document.getElementById('gameTeam').value.trim();
+  const teamSelect = document.getElementById('gameTeamSelect');
+  const teamId = parseInt(teamSelect.value);
+  const teams = await DB.getAll('teams');
+  const teamObj = teams.find(t => t.id === teamId);
+  if (!teamObj) return alert('Selecciona un equip');
+  const team = teamObj.name;
   const opponent = document.getElementById('gameOpponent').value.trim();
   const periods = parseInt(document.getElementById('gamePeriods').value);
   if (!opponent) return alert('Introdueix el nom del rival');
@@ -685,11 +697,14 @@ async function startGame() {
   if (playerIds.length === 0) return alert('Selecciona almenys un jugador');
 
   const isHome = document.querySelector('input[name="gameSide"]:checked').value === 'local';
-  const teamSelect = document.getElementById('gameTeamSelect');
-  const teamId = teamSelect ? (parseInt(teamSelect.value) || null) : null;
+  const typeSel = document.getElementById('gameType');
+  const type = typeSel ? typeSel.value : null;
+  const dateSel = document.getElementById('gameDate');
+  const dateVal = dateSel ? dateSel.value : '';
+  const date = dateVal ? new Date(dateVal + 'T12:00:00').toISOString() : new Date().toISOString();
   const game = {
-    date: new Date().toISOString(),
-    team, opponent, periods,
+    date,
+    team, opponent, periods, type,
     currentPeriod: 1, playerIds, isActive: true,
     isHome, teamId,
     rival1pt: 0, rival2pt: 0, rival3pt: 0,
@@ -1207,7 +1222,7 @@ async function renderHistory() {
       <li class="list-group-item list-group-item-action d-flex align-items-center justify-content-between px-2 py-2 game-item" data-game-id="${g.id}">
         <div>
           <div class="fw-semibold">${esc(g.team)} <span class="game-score">${pts}</span> - ${rPts} ${esc(g.opponent)} ${status}</div>
-          <div class="small text-secondary">${dateStr} &middot; ${periodsDesc(g)}</div>
+          <div class="small text-secondary">${dateStr} &middot; ${periodsDesc(g)}${g.type ? ` &middot; <span class="badge text-bg-secondary">${esc(g.type)}</span>` : ''}</div>
         </div>
         <button class="btn btn-sm btn-outline-danger delete-game-btn" data-game-id="${g.id}">&#128465;</button>
       </li>
@@ -1262,8 +1277,10 @@ async function viewGameDetail(gameId) {
       <span style="color:${!homeSide ? 'var(--primary)' : '#888'}">${esc(game.opponent)}</span>
     </div>
     <div class="fs-3 fw-bold" style="color:var(--primary)">${gPts} - ${gRival}</div>
-    <div class="small text-secondary mb-2">${dateStr} &middot; ${periodsDesc(game)}</div>
+    <div class="small text-secondary mb-2">${game.type ? `${esc(game.type)} &middot; ` : ''}${dateStr} &middot; ${periodsDesc(game)}</div>
   `;
+
+  document.getElementById('detailMetaEdit').innerHTML = '';
 
   // Stats table
   const detailRestFields = REST_FIELDS;
@@ -1283,7 +1300,8 @@ async function viewGameDetail(gameId) {
     const pts = calcScore(s);
     const val = calcVal(s);
     const reb = s.oReb + s.dReb;
-    html += `<tr><td class="player-name">${esc(name)}</td>`;
+    const zero = FIELDS.every(f => !s[f]);
+    html += `<tr><td class="player-name">${esc(name)}${zero ? ` <button class="btn btn-sm btn-outline-danger py-0 px-1" title="No ha jugat: treu-lo del partit" onclick="removePlayerFromGame(${game.id}, ${s.playerId})">&#10005;</button>` : ''}</td>`;
     html += `<td>${pts}</td><td>${reb}</td><td>${s.assists}</td>`;
     html += `<td>${s.twoMade}</td><td>${s.twoMissed}</td><td>${pct(s.twoMade, s.twoMissed)}</td>`;
     html += `<td>${s.threeMade}</td><td>${s.threeMissed}</td><td>${pct(s.threeMade, s.threeMissed)}</td>`;
@@ -1313,6 +1331,7 @@ async function viewGameDetail(gameId) {
 
   document.getElementById('detailActions').innerHTML = `
     <button class="btn btn-primary" onclick="editGame(${game.id})">&#9998; Editar Estadístiques</button>
+    <button class="btn btn-outline-secondary" onclick="toggleGameMetaEdit()">&#128197; Tipus / Data</button>
   `;
 
   renderDetailPlays(game, playerMap, homeSide);
@@ -1409,6 +1428,61 @@ function setDetailQuarter(q, gameId) {
   } else {
     viewGameDetail(gameId);
   }
+}
+
+async function removePlayerFromGame(gameId, playerId) {
+  if (!confirm('Marcar aquest jugador com a no jugat? Quedarà fora del partit i no comptarà com a partit jugat.')) return;
+  const game = await DB.get('games', gameId);
+  if (!game) return;
+  const stats = await DB.getByIndex('stats', 'gameId', gameId);
+  const record = stats.find(s => s.playerId === playerId);
+  if (record) await DB.delete('stats', record.id);
+  game.playerIds = (game.playerIds || []).filter(pid => pid !== playerId);
+  if (game.onCourtPlayerIds) game.onCourtPlayerIds = game.onCourtPlayerIds.filter(pid => pid !== playerId);
+  await DB.put('games', game);
+  renderHistory();
+  viewGameDetail(gameId);
+}
+
+function toggleGameMetaEdit() {
+  const game = cachedDetailGame;
+  const c = document.getElementById('detailMetaEdit');
+  if (!game || !c) return;
+  if (c.innerHTML === '') {
+    const d = new Date(game.date);
+    const today = isNaN(d.getTime()) ? '' :
+      d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    c.innerHTML = `
+      <div class="card border-secondary"><div class="card-body p-2 d-flex flex-wrap gap-2 align-items-end">
+        <div>
+          <label class="form-label small text-secondary mb-1">Tipus de partit:</label>
+          <select id="detailGameType" class="form-select form-select-sm">${GAME_TYPES.map(t => `<option value="${t}" ${game.type === t ? 'selected' : ''}>${t}</option>`).join('')}</select>
+        </div>
+        <div>
+          <label class="form-label small text-secondary mb-1">Data:</label>
+          <input type="date" id="detailGameDate" class="form-control form-control-sm" value="${today}">
+        </div>
+        <button class="btn btn-sm btn-primary" onclick="saveGameMeta()">Desa</button>
+      </div></div>`;
+  } else {
+    c.innerHTML = '';
+  }
+}
+
+async function saveGameMeta() {
+  const game = cachedDetailGame;
+  if (!game) return;
+  const sel = document.getElementById('detailGameType');
+  const dIn = document.getElementById('detailGameDate');
+  if (sel) game.type = sel.value;
+  if (dIn && dIn.value) {
+    const nd = new Date(dIn.value + 'T12:00:00');
+    if (!isNaN(nd.getTime())) game.date = nd.toISOString();
+  }
+  await DB.put('games', game);
+  document.getElementById('detailMetaEdit').innerHTML = '';
+  renderHistory();
+  viewGameDetail(game.id);
 }
 
 // EDIT GAME

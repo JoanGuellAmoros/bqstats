@@ -75,14 +75,23 @@
             </div>
             <label class="form-label small text-secondary">Equip:</label>
             <select id="gameTeamSelect" class="form-select mb-2" onchange="onGameTeamChange()"></select>
-            <input type="text" id="gameTeam" class="form-control mb-2" placeholder="Nom de l'equip" value="Balaguer">
             <label class="form-label small text-secondary">Rival:</label>
             <input type="text" id="gameOpponent" class="form-control mb-2" placeholder="Nom del rival">
             <label class="form-label small text-secondary">Quarts:</label>
-            <select id="gamePeriods" class="form-select mb-3">
+            <select id="gamePeriods" class="form-select mb-2">
               <option value="4">4 quarts</option>
               <option value="2">2 parts</option>
             </select>
+            <label class="form-label small text-secondary">Tipus de partit:</label>
+            <select id="gameType" class="form-select mb-2">
+              <option value="NBA">NBA</option>
+              <option value="Lliga Catalana">Lliga Catalana</option>
+              <option value="ACB">ACB</option>
+              <option value="Eurolliga">Eurolliga</option>
+              <option value="Amistós">Amistós</option>
+            </select>
+            <label class="form-label small text-secondary">Data:</label>
+            <input type="date" id="gameDate" class="form-control mb-3">
             <label class="form-label small text-secondary">Selecciona jugadors:</label>
             <div id="playerSelectList" class="mb-3"></div>
             <button class="btn btn-primary w-100 btn-lg" onclick="startGame()">Començar Partit</button>
@@ -153,6 +162,7 @@
       <!-- GAME DETAIL -->
       <section id="viewGameDetail" class="view">
         <div id="detailHeader"></div>
+        <div id="detailMetaEdit" class="mb-2"></div>
         <ul class="nav nav-pills nav-fill gap-1 mb-3">
           <li class="nav-item"><button class="nav-link active" id="dtabStats" onclick="switchDetailTab('stats')">Resum / Estadistiques</button></li>
           <li class="nav-item"><button class="nav-link" id="dtabPlays" onclick="switchDetailTab('plays')">Jugades</button></li>
@@ -202,7 +212,7 @@
 
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
   <script src="db.js"></script>
-  <script src="app.js?v=23"></script>
+  <script src="app.js?v=24"></script>
   <script>
     try {
       if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
