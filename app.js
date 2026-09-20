@@ -169,7 +169,19 @@ async function renderLineupPicker() {
   const players = await DB.getAll('players');
   const pMap = {};
   players.forEach(p => pMap[p.id] = p);
-  const body = lineupPlayerIds.map(pid => {
+  const numOf = p => (p.number !== '' && p.number != null) ? parseInt(p.number) : null;
+  const sortedIds = lineupPlayerIds.slice().sort((a, b) => {
+    const pa = pMap[a];
+    const pb = pMap[b];
+    const an = pa ? numOf(pa) : null;
+    const bn = pb ? numOf(pb) : null;
+    if (an === null && bn === null) return (pa ? pa.name : '').localeCompare(pb ? pb.name : '');
+    if (an === null) return 1;
+    if (bn === null) return -1;
+    if (an !== bn) return an - bn;
+    return (pa ? pa.name : '').localeCompare(pb ? pb.name : '');
+  });
+  const body = sortedIds.map(pid => {
     const p = pMap[pid];
     const on = lineupSelection.includes(pid);
     return `
