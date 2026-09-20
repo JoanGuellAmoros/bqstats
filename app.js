@@ -706,6 +706,12 @@ async function renderNewGame() {
   const teams = await DB.getAll('teams');
   const sel = document.getElementById('gameTeamSelect');
   sel.innerHTML = teams.map(t => `<option value="${t.id}">${esc(t.name)}</option>`).join('');
+  const typeSel = document.getElementById('gameType');
+  if (typeSel) {
+    const prev = typeSel.value;
+    typeSel.innerHTML = GAME_TYPES.map(t => `<option value="${t}">${esc(t)}</option>`).join('');
+    typeSel.value = prev || GAME_TYPES[0];
+  }
   const selected = parseInt(sel.value);
   const gameDate = document.getElementById('gameDate');
   if (gameDate) gameDate.value = new Date().toISOString().slice(0, 10);
@@ -726,7 +732,17 @@ function renderGamePlayers(teamId, players) {
     container.innerHTML = '<div class="text-center text-secondary py-4">&#128101;<br>Primer afegeix jugadors a aquest equip</div>';
     return;
   }
-  container.innerHTML = teamPlayers.map(p => `
+  const numOf = p => (p.number !== '' && p.number != null) ? parseInt(p.number) : null;
+  const sorted = teamPlayers.slice().sort((a, b) => {
+    const an = numOf(a);
+    const bn = numOf(b);
+    if (an === null && bn === null) return a.name.localeCompare(b.name);
+    if (an === null) return 1;
+    if (bn === null) return -1;
+    if (an !== bn) return an - bn;
+    return a.name.localeCompare(b.name);
+  });
+  container.innerHTML = sorted.map(p => `
     <div class="form-check${p.active === false ? ' opacity-50' : ''}">
       <input class="form-check-input" type="checkbox" value="${p.id}" id="psel${p.id}" ${p.active === false ? '' : 'checked'}>
       <label class="form-check-label" for="psel${p.id}">${p.number ? '#' + p.number + ' ' : ''}${esc(p.name)}${p.active === false ? ' <small class="text-secondary">(inactiu)</small>' : ''}</label>
@@ -2044,7 +2060,6 @@ async function renderRecords() {
     allIndiv('Taps rebuts', s => s.blocksAgainst);
     allIndiv('Recuperacions', s => s.steals);
     allIndiv('Perdudes', s => s.turnovers);
-    allIndiv('Faltes fetes', s => s.pFouls);
     allIndiv('Faltes rebudes', s => s.foulsReceived);
     allIndiv('Triples ficats', s => s.threeMade);
     allIndiv('Triples intentats', s => s.threeMissed);
