@@ -1142,6 +1142,219 @@ function toggleStats() {
   document.getElementById('btnToggleStats').innerHTML = statsVisible ? '&#128200; Amagar' : '&#128200; Mostrar';
 }
 
+function Qempty() {
+  return { pts: 0, oReb: 0, dReb: 0, ast: 0, t3: 0, tw: 0, a2: 0, a3: 0, t1: 0, a1: 0, to: 0, fr: 0, pf: 0, ba: 0, bl: 0, st: 0 };
+}
+
+function quarterAccum(pl, fields, teamP) {
+  (fields || []).forEach(f => {
+    if (f === 'twoMade' && !fields.includes('threeMade')) { pl.pts += 2; pl.tw += 1; if (teamP) teamP.teamPts += 2; }
+    else if (f === 'threeMade') { pl.pts += 3; pl.t3 += 1; if (teamP) teamP.teamPts += 3; }
+    else if (f === 'ftMade') { pl.pts += 1; pl.t1 += 1; if (teamP) teamP.teamPts += 1; }
+    else if (f === 'oReb') pl.oReb += 1;
+    else if (f === 'dReb') pl.dReb += 1;
+    else if (f === 'assists') pl.ast += 1;
+    else if (f === 'twoMissed') pl.a2 += 1;
+    else if (f === 'threeMissed') pl.a3 += 1;
+    else if (f === 'ftMissed') pl.a1 += 1;
+    else if (f === 'turnovers') pl.to += 1;
+    else if (f === 'pFouls') pl.pf += 1;
+    else if (f === 'foulsReceived') pl.fr += 1;
+    else if (f === 'blocksAgainst') pl.ba += 1;
+    else if (f === 'blocks') pl.bl += 1;
+    else if (f === 'steals') pl.st += 1;
+  });
+}
+
+const RECORD_METRICS = [
+  { key: 'pts', abb: 'PTS', label: 'Punts', gPl: s => calcScore(s), qPl: pl => pl.pts, gTe: t => calcScore(t), qTe: x => x.teamPts },
+  { key: 'rebT', abb: 'REB', label: 'Rebots totals', gPl: s => s.oReb + s.dReb, qPl: pl => pl.oReb + pl.dReb, gTe: t => t.oReb + t.dReb, qTe: x => x.rebT },
+  { key: 'rebO', abb: 'REBO', label: 'Rebots ofensius', gPl: s => s.oReb, qPl: pl => pl.oReb, gTe: t => t.oReb, qTe: x => x.rebO },
+  { key: 'rebD', abb: 'REBD', label: 'Rebots defensius', gPl: s => s.dReb, qPl: pl => pl.dReb, gTe: t => t.dReb, qTe: x => x.rebD },
+  { key: 'ast', abb: 'AST', label: 'Assistències', gPl: s => s.assists, qPl: pl => pl.ast, gTe: t => t.assists, qTe: x => x.ast },
+  { key: 'blk', abb: 'TAPS', label: 'Taps', gPl: s => s.blocks, qPl: pl => pl.bl, gTe: t => t.blocks, qTe: x => x.bl },
+  { key: 'bka', abb: 'TAPR', label: 'Taps rebuts', gPl: s => s.blocksAgainst, qPl: pl => pl.ba, gTe: t => t.blocksAgainst, qTe: x => x.ba },
+  { key: 'stl', abb: 'REC', label: 'Recuperacions', gPl: s => s.steals, qPl: pl => pl.st, gTe: t => t.steals, qTe: x => x.st },
+  { key: 'tov', abb: 'PER', label: 'Perdudes', gPl: s => s.turnovers, qPl: pl => pl.to, gTe: t => t.turnovers, qTe: x => x.to },
+  { key: 'pff', abb: 'FAF', label: 'Faltes fetes', qPl: pl => pl.pf, gTe: t => t.pFouls, qTe: x => x.pf },
+  { key: 'frb', abb: 'FAR', label: 'Faltes rebudes', gPl: s => s.foulsReceived, qPl: pl => pl.fr, gTe: t => t.foulsReceived, qTe: x => x.fr },
+  { key: 't1f', abb: 'T1F', label: 'Tirs lliures ficats', gPl: s => s.ftMade, qPl: pl => pl.t1, gTe: t => t.ftMade, qTe: x => x.t1 },
+  { key: 't1i', abb: 'T1I', label: 'Tirs lliures intentats', gPl: s => s.ftMissed, qPl: pl => pl.a1, gTe: t => t.ftMissed, qTe: x => x.a1 },
+  { key: 't3f', abb: 'T3F', label: 'Triples ficats', gPl: s => s.threeMade, qPl: pl => pl.t3, gTe: t => t.threeMade, qTe: x => x.t3 },
+  { key: 't3i', abb: 'T3I', label: 'Triples intentats', gPl: s => s.threeMissed, qPl: pl => pl.a3, gTe: t => t.threeMissed, qTe: x => x.a3 },
+  { key: 't2f', abb: 'T2F', label: 'Tirs de 2 ficats', gPl: s => s.twoMade, qPl: pl => pl.tw, gTe: t => t.twoMade, qTe: x => x.tw },
+  { key: 't2i', abb: 'T2I', label: 'Tirs de 2 intentats', gPl: s => s.twoMissed, qPl: pl => pl.a2, gTe: t => t.twoMissed, qTe: x => x.a2 }
+];
+
+let recordBaselinesCache = null;
+
+function invalidateRecordBaselines() {
+  recordBaselinesCache = null;
+}
+
+async function getRecordBaselines() {
+  if (recordBaselinesCache) return recordBaselinesCache;
+  const allGames = await DB.getAll('games');
+  const finished = allGames.filter(g => !g.isActive);
+  const finishedIds = new Set(finished.map(g => g.id));
+  const stats = (await DB.getAll('stats')).filter(s => finishedIds.has(s.gameId));
+  const gameMap = {};
+  finished.forEach(g => gameMap[g.id] = g);
+  const scoreMap = {};
+  stats.forEach(s => {
+    if (!scoreMap[s.gameId]) scoreMap[s.gameId] = emptyStats();
+    Object.keys(scoreMap[s.gameId]).forEach(k => scoreMap[s.gameId][k] += s[k]);
+  });
+  const bl = { pl: {}, te: {}, plq: {}, teq: {} };
+  const upd = (obj, key, v) => { if (v === undefined || v === null) return; if (!(key in obj) || v > obj[key]) obj[key] = v; };
+  RECORD_METRICS.forEach(m => {
+    if (m.gPl) stats.forEach(s => upd(bl.pl, m.key, m.gPl(s)));
+    if (m.gTe) Object.entries(scoreMap).forEach(([gid, t]) => {
+      const g = gameMap[gid];
+      const rival = (g.rival1pt || 0) + (g.rival2pt || 0) * 2 + (g.rival3pt || 0) * 3;
+      upd(bl.te, m.key, m.gTe(t, rival));
+    });
+  });
+  finished.forEach(g => {
+    const per = {};
+    (g.actions || []).forEach(a => {
+      if (a.type === 'sub' || a.type === 'addPlayer') return;
+      const q = a.period || 1;
+      if (!per[q]) per[q] = { teamPts: 0, rivalPts: 0, players: {} };
+      const p = per[q];
+      if (a.playerId === -1) { p.rivalPts += parseInt(a.text) || 0; return; }
+      if (!p.players[a.playerId]) p.players[a.playerId] = Qempty();
+      quarterAccum(p.players[a.playerId], a.fields, p);
+    });
+    Object.entries(per).forEach(([q, p]) => {
+      const players = Object.values(p.players);
+      const sum = f => players.reduce((acc, pl) => acc + pl[f], 0);
+      const team = {
+        teamPts: p.teamPts, rivalPts: p.rivalPts,
+        total: p.teamPts + p.rivalPts, marge: p.teamPts - p.rivalPts,
+        rebT: sum('oReb') + sum('dReb'), rebO: sum('oReb'), rebD: sum('dReb'),
+        ast: sum('ast'), bl: sum('bl'), ba: sum('ba'), st: sum('st'),
+        to: sum('to'), pf: sum('pf'), fr: sum('fr'),
+        tw: sum('tw'), t3: sum('t3'), t1: sum('t1'), a2: sum('a2'), a3: sum('a3'), a1: sum('a1')
+      };
+      RECORD_METRICS.forEach(m => {
+        if (m.qTe) upd(bl.teq, m.key, m.qTe(team));
+        if (m.qPl) players.forEach(pl => upd(bl.plq, m.key, m.qPl(pl)));
+      });
+    });
+  });
+  recordBaselinesCache = bl;
+  return recordBaselinesCache;
+}
+
+function recBadge(teamLevel, isQuarter, abb, value) {
+  const who = teamLevel ? 'E' : 'J';
+  const valueStr = (isQuarter && value !== undefined) ? ` ${value}` : '';
+  if (teamLevel) {
+    return isQuarter
+      ? `<span class="badge text-dark" style="background:#f39c12">*R&Egrave;CORD* E ${abb}${valueStr}</span>`
+      : `<span class="badge bg-warning text-dark">*R&Egrave;CORD* E ${abb}</span>`;
+  }
+  return isQuarter
+    ? `<span class="badge bg-info text-dark">*R&Egrave;CORD* J ${abb}${valueStr}</span>`
+    : `<span class="badge bg-success">*R&Egrave;CORD* J ${abb}</span>`;
+}
+
+async function computeLiveRecordFlags() {
+  const flags = {};
+  if (!actionLog.length) return flags;
+  const bl = await getRecordBaselines();
+  if (!Object.keys(bl.pl).length && !Object.keys(bl.te).length && !Object.keys(bl.plq).length && !Object.keys(bl.teq).length) return flags;
+  const plCur = {};
+  const teamCur = emptyStats();
+  let rival = 0;
+  const qPlayers = {};
+  const qTeams = {};
+  const seenPl = {};
+  const seenTe = {};
+  const seenPlq = {};
+  const seenTeq = {};
+  const teamView = (t, r) => ({
+    teamPts: calcScore(t), rivalPts: r, total: calcScore(t) + r, marge: calcScore(t) - r,
+    rebT: t.oReb + t.dReb, rebO: t.oReb, rebD: t.dReb,
+    ast: t.assists, bl: t.blocks, ba: t.blocksAgainst, st: t.steals,
+    to: t.turnovers, pf: t.pFouls, fr: t.foulsReceived,
+    tw: t.twoMade, t3: t.threeMade, t1: t.ftMade, a2: t.twoMissed, a3: t.threeMissed, a1: t.ftMissed
+  });
+  const qTeamView = qt => ({
+    teamPts: qt.teamPts, rivalPts: qt.rivalPts, total: qt.teamPts + qt.rivalPts, marge: qt.teamPts - qt.rivalPts,
+    rebT: qt.oReb + qt.dReb, rebO: qt.oReb, rebD: qt.dReb,
+    ast: qt.ast, bl: qt.bl, ba: qt.ba, st: qt.st,
+    to: qt.to, pf: qt.pf, fr: qt.fr,
+    tw: qt.tw, t3: qt.t3, t1: qt.t1, a2: qt.a2, a3: qt.a3, a1: qt.a1
+  });
+  for (let i = 0; i < actionLog.length; i++) {
+    const e = actionLog[i];
+    if (e.type === 'addPlayer') continue;
+    const period = e.period || 1;
+    const badges = [];
+    if (e.playerId !== undefined && e.playerId !== -1) {
+      if (!plCur[e.playerId]) plCur[e.playerId] = emptyStats();
+      if (!qPlayers[period]) qPlayers[period] = {};
+      if (!qPlayers[period][e.playerId]) qPlayers[period][e.playerId] = Qempty();
+      if (!qTeams[period]) qTeams[period] = { teamPts: 0, rivalPts: 0, oReb: 0, dReb: 0, ast: 0, bl: 0, ba: 0, st: 0, to: 0, pf: 0, fr: 0, tw: 0, t3: 0, t1: 0, a2: 0, a3: 0, a1: 0 };
+      const beforeP = { ...plCur[e.playerId] };
+      const beforeQ = { ...qPlayers[period][e.playerId] };
+      const beforeT = { ...teamCur };
+      const beforeR = rival;
+      const beforeQT = { ...qTeams[period] };
+      (e.fields || []).forEach(f => { if (f in plCur[e.playerId]) plCur[e.playerId][f]++; });
+      (e.fields || []).forEach(f => { if (f in teamCur) teamCur[f]++; });
+      quarterAccum(qPlayers[period][e.playerId], e.fields);
+      quarterAccum(qTeams[period], e.fields, qTeams[period]);
+      const afterP = plCur[e.playerId];
+      const afterQ = qPlayers[period][e.playerId];
+      const afterT = teamView(teamCur, rival);
+      const afterQT = qTeamView(qTeams[period]);
+      RECORD_METRICS.forEach(m => {
+        if (m.gPl && (m.key in bl.pl)) {
+          const a = m.gPl(afterP), b = m.gPl(beforeP);
+          if (!seenPl[m.key] && b <= bl.pl[m.key] && a > bl.pl[m.key]) { seenPl[m.key] = true; badges.push(recBadge(false, false, m.abb)); }
+        }
+        if (m.gTe && (m.key in bl.te)) {
+          const a = m.gTe(teamCur, rival), b = m.gTe(beforeT, beforeR);
+          if (!seenTe[m.key] && b <= bl.te[m.key] && a > bl.te[m.key]) { seenTe[m.key] = true; badges.push(recBadge(true, false, m.abb)); }
+        }
+        if (m.qPl && (m.key in bl.plq)) {
+          const a = m.qPl(afterQ), b = m.qPl(beforeQ);
+          if (!seenPlq[m.key] && b <= bl.plq[m.key] && a > bl.plq[m.key]) { seenPlq[m.key] = true; badges.push(recBadge(false, true, m.abb, a)); }
+        }
+        if (m.qTe && (m.key in bl.teq)) {
+          const a = m.qTe(afterQT), b = m.qTe(beforeQT);
+          if (!seenTeq[m.key] && b <= bl.teq[m.key] && a > bl.teq[m.key]) { seenTeq[m.key] = true; badges.push(recBadge(true, true, m.abb, a)); }
+        }
+      });
+    } else if (e.playerId === -1) {
+      if (!qTeams[period]) qTeams[period] = { teamPts: 0, rivalPts: 0, oReb: 0, dReb: 0, ast: 0, bl: 0, ba: 0, st: 0, to: 0, pf: 0, fr: 0, tw: 0, t3: 0, t1: 0, a2: 0, a3: 0, a1: 0 };
+      const beforeR = rival;
+      const beforeQT = { ...qTeams[period] };
+      const pts = parseInt(e.text) || 0;
+      rival += pts;
+      qTeams[period].rivalPts += pts;
+      const afterT = teamView(teamCur, rival);
+      const afterQT = qTeamView(qTeams[period]);
+      const beforeT = teamCur;
+      RECORD_METRICS.forEach(m => {
+        if (m.gTe && (m.key in bl.te)) {
+          const a = m.gTe(teamCur, rival), b = m.gTe(beforeT, beforeR);
+          if (!seenTe[m.key] && b <= bl.te[m.key] && a > bl.te[m.key]) { seenTe[m.key] = true; badges.push(recBadge(true, false, m.abb)); }
+        }
+        if (m.qTe && (m.key in bl.teq)) {
+          const a = m.qTe(afterQT), b = m.qTe(beforeQT);
+          if (!seenTeq[m.key] && b <= bl.teq[m.key] && a > bl.teq[m.key]) { seenTeq[m.key] = true; badges.push(recBadge(true, true, m.abb)); }
+        }
+      });
+    }
+    if (badges.length) flags[i] = badges;
+  }
+  return flags;
+}
+
 async function renderActionLog() {
   const container = document.getElementById('liveActionLog');
   const players = await DB.getAll('players');
@@ -1152,6 +1365,7 @@ async function renderActionLog() {
   const start = actionLog.length - max;
   const running = {};
   const cumAt = {};
+  const flags = await computeLiveRecordFlags();
   const SHOT_LABELS = { twoMade: 'T2', twoMissed: 'T2', threeMade: 'T3', threeMissed: 'T3', ftMade: 'T1', ftMissed: 'T1' };
   for (let i = 0; i < actionLog.length; i++) {
     const entry = actionLog[i];
@@ -1187,10 +1401,11 @@ async function renderActionLog() {
     const entry = actionLog[i];
     const qStr = entry.period ? `Q${entry.period}` : '';
     const scoreStr = (entry.teamScore !== undefined && entry.rivalScore !== undefined) ? logScoreStr(entry.teamScore, entry.rivalScore, activeGame && activeGame.isHome !== false) : '';
+    const badges = flags[i] ? flags[i].join('') : '';
     if (entry.type === 'addPlayer') {
       const p = pMap[entry.playerId];
       const label = p ? abbrevName(p) : '#' + entry.playerId;
-      html += `<div class="log-entry">${qStr ? `<span class="log-q">${qStr}</span>` : ''}<span class="log-player">${esc(label)}</span> <span class="log-action">afegit</span>${scoreStr ? ` <span class="log-score">${scoreStr}</span>` : ''}</div>`;
+      html += `<div class="log-entry">${qStr ? `<span class="log-q">${qStr}</span>` : ''}<span class="log-player">${esc(label)}</span> <span class="log-action">afegit</span>${scoreStr ? ` <span class="log-score">${scoreStr}</span>` : ''}${badges}</div>`;
       continue;
     }
     if (entry.type === 'sub') {
@@ -1198,17 +1413,17 @@ async function renderActionLog() {
       const pIn = pMap[entry.inId];
       const outLabel = pOut ? abbrevName(pOut) : '#' + entry.outId;
       const inLabel = pIn ? abbrevName(pIn) : '#' + entry.inId;
-      html += `<div class="log-entry">${qStr ? `<span class="log-q">${qStr}</span>` : ''}<span class="log-player">${esc(outLabel)}</span> <span class="log-action">surt</span> &middot; <span class="log-player">${esc(inLabel)}</span> <span class="log-action">entra</span>${scoreStr ? ` <span class="log-score">${scoreStr}</span>` : ''}</div>`;
+      html += `<div class="log-entry">${qStr ? `<span class="log-q">${qStr}</span>` : ''}<span class="log-player">${esc(outLabel)}</span> <span class="log-action">surt</span> &middot; <span class="log-player">${esc(inLabel)}</span> <span class="log-action">entra</span>${scoreStr ? ` <span class="log-score">${scoreStr}</span>` : ''}${badges}</div>`;
       continue;
     }
     const p = pMap[entry.playerId];
     const actionText = entry.text || (entry.fields || []).map(f => STAT_NAMES[f] || f).join(' + ');
     if (entry.playerId === -1) {
-      html += `<div class="log-entry">${qStr ? `<span class="log-q">${qStr}</span>` : ''}<span class="log-rival">${esc(actionText)}</span>${scoreStr ? ` <span class="log-score">${scoreStr}</span>` : ''}</div>`;
+      html += `<div class="log-entry">${qStr ? `<span class="log-q">${qStr}</span>` : ''}<span class="log-rival">${esc(actionText)}</span>${scoreStr ? ` <span class="log-score">${scoreStr}</span>` : ''}${badges}</div>`;
       continue;
     }
     const label = p ? abbrevName(p) : '#' + entry.playerId;
-    html += `<div class="log-entry">${qStr ? `<span class="log-q">${qStr}</span>` : ''}<span class="log-player">${esc(label)}</span> <span class="log-action">${esc(actionText)}</span><span class="log-cum">${fmtCum(i)}</span>${scoreStr ? ` <span class="log-score">${scoreStr}</span>` : ''}</div>`;
+    html += `<div class="log-entry">${qStr ? `<span class="log-q">${qStr}</span>` : ''}<span class="log-player">${esc(label)}</span> <span class="log-action">${esc(actionText)}</span><span class="log-cum">${fmtCum(i)}</span>${scoreStr ? ` <span class="log-score">${scoreStr}</span>` : ''}${badges}</div>`;
   }
   container.innerHTML = html || '<div class="log-entry text-secondary">Cap acció encara</div>';
   container.scrollTop = 0;
@@ -1298,6 +1513,7 @@ async function endGame() {
   actionLog = [];
   isEditing = false;
   currentPlayerTab = null;
+  invalidateRecordBaselines();
   navigateTo('viewHistory');
   renderHistory();
 }
