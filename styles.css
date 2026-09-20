@@ -9,6 +9,7 @@ body { background: #1a1a2e; color: #e0e0e0; }
 #mainContent { flex: 1; overflow-y: auto; padding-bottom: 16px; }
 .view { display: none; }
 .view.active { display: block; }
+.clickable-name { cursor: pointer; border-bottom: 1px dashed rgba(224, 224, 224, 0.5); }
 
 /* stat buttons */
 .stat-btn { font-size: 0.85rem; padding: 8px 14px; min-width: 54px; }

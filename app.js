@@ -130,9 +130,47 @@ function updateLiveScore() {
   const team = activeGame ? esc(activeGame.team) : '';
   const opp = activeGame ? esc(activeGame.opponent) : '';
   const q = calcQuarterScore();
-  document.getElementById('liveScore').innerHTML =
-    `<span style="color:${home ? 'var(--primary)' : '#888'}">${team}</span> ${sc} - ${rs} <span style="color:${!home ? 'var(--primary)' : '#888'}">${opp}</span>` +
-    ` <span class="small text-secondary">(${q.team}-${q.rival})</span>`;
+  const teamSpan = `<span style="color:var(--primary)">${team}</span>`;
+  const oppSpan = `<span class="clickable-name" style="color:#888" onclick="editLiveName('opponent')">${opp}</span>`;
+  const qSpan = home
+    ? `<span class="small text-secondary">(${q.team}-${q.rival})</span>`
+    : `<span class="small text-secondary">(${q.rival}-${q.team})</span>`;
+  document.getElementById('liveScore').innerHTML = home
+    ? `${teamSpan} ${sc} - ${rs} ${oppSpan} ${qSpan}`
+    : `${oppSpan} ${rs} - ${sc} ${teamSpan} ${qSpan}`;
+}
+
+async function editLiveName(which) {
+  if (!activeGame) return;
+  const cur = which === 'team' ? activeGame.team : activeGame.opponent;
+  const val = prompt(`Nom ${which === 'team' ? "de l'equip" : 'del rival'}:`, cur);
+  if (val === null) return;
+  const trimmed = val.trim();
+  if (!trimmed) return;
+  if (which === 'team') activeGame.team = trimmed;
+  else activeGame.opponent = trimmed;
+  await DB.put('games', activeGame);
+  updateLiveScore();
+  if (document.querySelector('#viewLiveGame').classList.contains('active')) renderLiveGame();
+}
+
+async function toggleGameSideLive() {
+  if (!activeGame) return;
+  activeGame.isHome = !(activeGame.isHome !== false);
+  await DB.put('games', activeGame);
+  updateSideButton();
+  updateLiveScore();
+  if (document.querySelector('#viewLiveGame').classList.contains('active')) renderLiveGame();
+}
+
+function updateSideButton() {
+  const b = document.getElementById('btnToggleSide');
+  if (!b) return;
+  const home = activeGame && activeGame.isHome !== false;
+  b.textContent = home ? 'L' : 'V';
+  b.title = home ? 'Local - clic per canviar a Visitant' : 'Visitant - clic per canviar a Local';
+  b.classList.toggle('btn-outline-success', home);
+  b.classList.toggle('btn-outline-danger', !home);
 }
 
 // POPUP
@@ -347,8 +385,10 @@ function navigateTo(viewId) {
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
   document.getElementById(viewId).classList.add('active');
   document.getElementById('btnBack').style.display = viewId === 'viewHome' ? 'none' : 'block';
-  document.getElementById('btnAddPlayerTop').style.display =
-    (viewId === 'viewLiveGame' && activeGame && !isEditing) ? '' : 'none';
+  const inLive = viewId === 'viewLiveGame' && activeGame && !isEditing;
+  document.getElementById('btnAddPlayerTop').style.display = inLive ? '' : 'none';
+  document.getElementById('btnToggleSide').style.display = inLive ? '' : 'none';
+  if (inLive) updateSideButton();
 
   const titles = {
     viewHome: 'Bàsquet Stats',
@@ -830,6 +870,7 @@ async function startGame() {
 // LIVE GAME
 async function renderLiveGame() {
   if (!activeGame) return;
+  updateSideButton();
 
   const players = await DB.getAll('players');
   const playerMap = {};
@@ -1145,7 +1186,7 @@ async function renderActionLog() {
   for (let i = actionLog.length - 1; i >= start; i--) {
     const entry = actionLog[i];
     const qStr = entry.period ? `Q${entry.period}` : '';
-    const scoreStr = (entry.teamScore !== undefined && entry.rivalScore !== undefined) ? `${entry.teamScore}-${entry.rivalScore}` : '';
+    const scoreStr = (entry.teamScore !== undefined && entry.rivalScore !== undefined) ? logScoreStr(entry.teamScore, entry.rivalScore, activeGame && activeGame.isHome !== false) : '';
     if (entry.type === 'addPlayer') {
       const p = pMap[entry.playerId];
       const label = p ? abbrevName(p) : '#' + entry.playerId;
@@ -1232,6 +1273,10 @@ async function saveAndLeave() {
   currentPlayerTab = null;
   navigateTo('viewHome');
   renderHome();
+}
+
+function logScoreStr(ts, rs, isHome) {
+  return isHome === false ? `${rs}-${ts}` : `${ts}-${rs}`;
 }
 
 async function saveCurrentSession() {
@@ -1506,13 +1551,14 @@ async function viewGameDetail(gameId) {
   const gPts = calcScore(totalRowH);
   const gRival = (game.rival1pt || 0) + (game.rival2pt || 0) * 2 + (game.rival3pt || 0) * 3;
   const homeSide = game.isHome !== false;
+  const teamSpanD = `<span style="color:var(--primary)">${esc(game.team)}</span>`;
+  const oppSpanD = `<span style="color:#888">${esc(game.opponent)}</span>`;
+  const scoreStrD = `<span style="color:var(--primary)">${homeSide ? `${gPts} - ${gRival}` : `${gRival} - ${gPts}`}</span>`;
   document.getElementById('detailHeader').innerHTML = `
     <div class="fs-5 fw-bold mb-1">
-      <span style="color:${homeSide ? 'var(--primary)' : '#888'}">${esc(game.team)}</span>
-      vs
-      <span style="color:${!homeSide ? 'var(--primary)' : '#888'}">${esc(game.opponent)}</span>
+      ${homeSide ? `${teamSpanD} vs ${oppSpanD}` : `${oppSpanD} vs ${teamSpanD}`}
     </div>
-    <div class="fs-3 fw-bold" style="color:var(--primary)">${gPts} - ${gRival}</div>
+    <div class="fs-3 fw-bold">${scoreStrD}</div>
     <div class="small text-secondary mb-2">${game.type ? `${esc(game.type)} &middot; ` : ''}${dateStr} &middot; ${periodsDesc(game)}</div>
   `;
 
@@ -1605,7 +1651,7 @@ function renderDetailPlays(game, playerMap, homeSide) {
   const filtered = detailQuarterFilter === null ? game.actions : game.actions.filter(a => a.period === detailQuarterFilter);
   filtered.forEach(a => {
     const qStr = a.period ? (a.period <= periods ? `Q${a.period}` : `P${a.period - periods}`) : '?';
-    const scoreStr = (a.teamScore !== undefined && a.rivalScore !== undefined) ? `${a.teamScore} - ${a.rivalScore}` : '';
+    const scoreStr = (a.teamScore !== undefined && a.rivalScore !== undefined) ? logScoreStr(a.teamScore, a.rivalScore, game.isHome !== false) : '';
 
     if (a.type === 'addPlayer') {
       const p = playerMap[a.playerId];
