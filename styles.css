@@ -10,6 +10,7 @@ body { background: #1a1a2e; color: #e0e0e0; }
 .view { display: none; }
 .view.active { display: block; }
 .clickable-name { cursor: pointer; border-bottom: 1px dashed rgba(224, 224, 224, 0.5); }
+.log-q.clickable { cursor: pointer; text-decoration: underline dotted; }
 
 /* stat buttons */
 .stat-btn { font-size: 0.85rem; padding: 8px 14px; min-width: 54px; }

@@ -1128,6 +1128,81 @@ async function undoLastAction() {
   updateLiveScore();
 }
 
+function basketKindOf(fields) {
+  fields = fields || [];
+  if (fields.includes('twoMade')) return 't2';
+  if (fields.includes('threeMade')) return 't3';
+  if (fields.includes('ftMade')) return 't1';
+  return null;
+}
+
+const BASKET_FIELDS = {
+  t1: { made: 'ftMade', missed: 'ftMissed', text: 'TL Fet', pts: 1 },
+  t2: { made: 'twoMade', missed: 'twoMissed', text: '2P Fet', pts: 2 },
+  t3: { made: 'threeMade', missed: 'threeMissed', text: '3P Fet', pts: 3 }
+};
+
+function recomputeLogScores() {
+  let team = 0;
+  let rival = 0;
+  for (const a of actionLog) {
+    if (a.type === 'addPlayer' || a.type === 'sub') {
+      a.teamScore = team;
+      a.rivalScore = rival;
+      continue;
+    }
+    if (a.playerId === -1) {
+      rival += parseInt(a.fields && a.fields[0]) || 0;
+      a.teamScore = team;
+      a.rivalScore = rival;
+      continue;
+    }
+    (a.fields || []).forEach(f => {
+      if (f === 'twoMade') team += 2;
+      else if (f === 'threeMade') team += 3;
+      else if (f === 'ftMade') team += 1;
+    });
+    a.teamScore = team;
+    a.rivalScore = rival;
+  }
+}
+
+function editBasket(i) {
+  const e = actionLog[i];
+  if (!e || basketKindOf(e.fields) === null) return;
+  const current = BASKET_FIELDS[basketKindOf(e.fields)];
+  const btn = (kind, label) => `<button class="btn btn-outline-primary flex-fill ${basketKindOf(e.fields) === kind ? 'active' : ''}" onclick="replaceBasket(${i}, '${kind}')">${label}</button>`;
+  const body = `<div class="small text-secondary mb-2">Substitueix la cistella (actual: ${current.text}) per:</div>
+    <div class="d-flex gap-2">${btn('t1', 'T1 (1p)')}${btn('t2', 'T2 (2p)')}${btn('t3', 'T3 (3p)')}</div>`;
+  openPopup('Editar cistella', body, `<button class="btn btn-outline-secondary" onclick="closePopup()">Cancel·lar</button>`);
+}
+
+async function replaceBasket(i, kind) {
+  const e = actionLog[i];
+  const oldKind = basketKindOf(e && e.fields);
+  const newB = BASKET_FIELDS[kind];
+  if (!e || oldKind === null || !newB || oldKind === kind) {
+    closePopup();
+    return;
+  }
+  const oldB = BASKET_FIELDS[oldKind];
+  const st = activePlayerStats[e.playerId];
+  if (st) {
+    if (st[oldB.made] > 0) st[oldB.made]--;
+    if (st[oldB.missed] > 0) st[oldB.missed]--;
+    st[newB.made]++;
+    st[newB.missed]++;
+  }
+  e.fields = [newB.made, newB.missed];
+  e.text = newB.text;
+  recomputeLogScores();
+  closePopup();
+  await saveCurrentSession();
+  renderLiveStats();
+  renderActionLog();
+  updateLiveScore();
+}
+
 function toggleActionLog() {
   logVisible = !logVisible;
   const el = document.getElementById('liveActionLog');
@@ -1400,12 +1475,18 @@ async function renderActionLog() {
   for (let i = actionLog.length - 1; i >= start; i--) {
     const entry = actionLog[i];
     const qStr = entry.period ? `Q${entry.period}` : '';
+    const isBasket = entry.playerId !== undefined && entry.playerId !== -1 && basketKindOf(entry.fields) !== null;
+    const qLabel = qStr
+      ? (isBasket
+        ? `<span class="log-q clickable" onclick="editBasket(${i})" title="Editar cistella">${qStr}</span>`
+        : `<span class="log-q">${qStr}</span>`)
+      : '';
     const scoreStr = (entry.teamScore !== undefined && entry.rivalScore !== undefined) ? logScoreStr(entry.teamScore, entry.rivalScore, activeGame && activeGame.isHome !== false) : '';
     const badges = flags[i] ? flags[i].join('') : '';
     if (entry.type === 'addPlayer') {
       const p = pMap[entry.playerId];
       const label = p ? abbrevName(p) : '#' + entry.playerId;
-      html += `<div class="log-entry">${qStr ? `<span class="log-q">${qStr}</span>` : ''}<span class="log-player">${esc(label)}</span> <span class="log-action">afegit</span>${scoreStr ? ` <span class="log-score">${scoreStr}</span>` : ''}${badges}</div>`;
+      html += `<div class="log-entry">${qLabel}<span class="log-player">${esc(label)}</span> <span class="log-action">afegit</span>${scoreStr ? ` <span class="log-score">${scoreStr}</span>` : ''}${badges}</div>`;
       continue;
     }
     if (entry.type === 'sub') {
@@ -1413,17 +1494,17 @@ async function renderActionLog() {
       const pIn = pMap[entry.inId];
       const outLabel = pOut ? abbrevName(pOut) : '#' + entry.outId;
       const inLabel = pIn ? abbrevName(pIn) : '#' + entry.inId;
-      html += `<div class="log-entry">${qStr ? `<span class="log-q">${qStr}</span>` : ''}<span class="log-player">${esc(outLabel)}</span> <span class="log-action">surt</span> &middot; <span class="log-player">${esc(inLabel)}</span> <span class="log-action">entra</span>${scoreStr ? ` <span class="log-score">${scoreStr}</span>` : ''}${badges}</div>`;
+      html += `<div class="log-entry">${qLabel}<span class="log-player">${esc(outLabel)}</span> <span class="log-action">surt</span> &middot; <span class="log-player">${esc(inLabel)}</span> <span class="log-action">entra</span>${scoreStr ? ` <span class="log-score">${scoreStr}</span>` : ''}${badges}</div>`;
       continue;
     }
     const p = pMap[entry.playerId];
     const actionText = entry.text || (entry.fields || []).map(f => STAT_NAMES[f] || f).join(' + ');
     if (entry.playerId === -1) {
-      html += `<div class="log-entry">${qStr ? `<span class="log-q">${qStr}</span>` : ''}<span class="log-rival">${esc(actionText)}</span>${scoreStr ? ` <span class="log-score">${scoreStr}</span>` : ''}${badges}</div>`;
+      html += `<div class="log-entry">${qLabel}<span class="log-rival">${esc(actionText)}</span>${scoreStr ? ` <span class="log-score">${scoreStr}</span>` : ''}${badges}</div>`;
       continue;
     }
     const label = p ? abbrevName(p) : '#' + entry.playerId;
-    html += `<div class="log-entry">${qStr ? `<span class="log-q">${qStr}</span>` : ''}<span class="log-player">${esc(label)}</span> <span class="log-action">${esc(actionText)}</span><span class="log-cum">${fmtCum(i)}</span>${scoreStr ? ` <span class="log-score">${scoreStr}</span>` : ''}${badges}</div>`;
+    html += `<div class="log-entry">${qLabel}<span class="log-player">${esc(label)}</span> <span class="log-action">${esc(actionText)}</span><span class="log-cum">${fmtCum(i)}</span>${scoreStr ? ` <span class="log-score">${scoreStr}</span>` : ''}${badges}</div>`;
   }
   container.innerHTML = html || '<div class="log-entry text-secondary">Cap acció encara</div>';
   container.scrollTop = 0;
