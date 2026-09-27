@@ -10,7 +10,7 @@ body { background: #1a1a2e; color: #e0e0e0; }
 .view { display: none; }
 .view.active { display: block; }
 .clickable-name { cursor: pointer; border-bottom: 1px dashed rgba(224, 224, 224, 0.5); }
-.log-q.clickable { cursor: pointer; text-decoration: underline dotted; }
+.log-q.clickable, .chat-q.clickable { cursor: pointer; text-decoration: underline dotted; }
 
 /* stat buttons */
 .stat-btn { font-size: 0.85rem; padding: 8px 14px; min-width: 54px; }
@@ -28,6 +28,7 @@ body { background: #1a1a2e; color: #e0e0e0; }
   display: flex; flex-direction: column;
   overflow: hidden;
 }
+.popup-card.popup-wide { max-width: 94vw; }
 .popup-header {
   display: flex; align-items: center; justify-content: space-between;
   padding: 12px 16px; border-bottom: 1px solid #333;
@@ -123,12 +124,22 @@ body { background: #1a1a2e; color: #e0e0e0; }
 .btn-flash-orange { animation: btnFlashOrange 0.4s ease-out; }
 .btn-flash-info { animation: btnFlashInfo 0.4s ease-out; }
 
-/* #8 - active player tab highlight */
+/* #8 - player tab buttons: 2 per row, same fixed size, no growth on click */
+#liveTabs {
+  display: grid !important;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.25rem;
+}
+#liveTabs .player-tab {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .player-tab.active {
   background: var(--primary) !important;
   color: #000 !important;
   border-color: var(--primary) !important;
-  font-weight: 700;
   box-shadow: 0 0 8px rgba(0,200,83,0.4);
 }
 

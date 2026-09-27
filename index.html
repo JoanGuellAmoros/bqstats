@@ -38,7 +38,7 @@
           <select id="playerTeam" class="form-select" style="max-width:120px"></select>
           <button class="btn btn-primary" id="btnPlayerSave" onclick="addPlayer()">Afegir</button>
         </div>
-        <div class="d-flex align-items-center gap-2 mb-2">
+        <div class="d-flex align-items-center gap-2 mb-2" id="playerFilterRow">
           <label class="small text-secondary mb-0 text-nowrap">Filtrar per equip:</label>
           <select id="playerTeamFilter" class="form-select form-select-sm flex-grow-1" onchange="renderPlayers()"></select>
         </div>
@@ -49,6 +49,7 @@
           <button class="btn btn-sm btn-outline-secondary" onclick="clearPlayersSelection()" title="Cancel·lar selecció">&#10005;</button>
         </div>
         <ul id="playerList" class="list-group list-group-flush"></ul>
+        <div id="playerSummary" style="display:none"></div>
       </section>
 
       <!-- TEAMS -->
@@ -58,6 +59,7 @@
           <button class="btn btn-primary" onclick="addTeam()">Afegir</button>
         </div>
         <ul id="teamList" class="list-group list-group-flush"></ul>
+        <div id="teamSummary" style="display:none"></div>
       </section>
 
       <!-- NEW GAME -->
@@ -135,14 +137,14 @@
           </div>
           <div class="d-flex gap-2 align-items-center justify-content-center flex-wrap">
             <button class="btn btn-sm btn-outline-secondary live-toggle-btn" id="btnUndo" onclick="undoLastAction()" disabled>&#8630; Desfer</button>
-            <button class="btn btn-sm btn-outline-secondary live-toggle-btn" id="btnToggleStats" onclick="toggleStats()">&#128200; Amagar</button>
-            <button class="btn btn-sm btn-secondary live-toggle-btn" id="btnToggleLog" onclick="toggleActionLog()">&#128220; Mostrar</button>
+            <button class="btn btn-sm btn-outline-secondary live-toggle-btn" id="btnToggleStats" onclick="toggleStats()">&#128200; Mostrar</button>
+            <button class="btn btn-sm btn-secondary live-toggle-btn" id="btnToggleLog" onclick="toggleActionLog()">&#128220; Amagar</button>
           </div>
         </div>
         <div class="stats-scroll">
           <div class="live-stats mb-2" id="liveStats"></div>
         </div>
-        <div class="live-action-log border border-secondary rounded p-2 mb-2" id="liveActionLog" style="display:none;max-height:300px;overflow-y:auto"></div>
+        <div class="live-action-log border border-secondary rounded p-2 mb-2" id="liveActionLog" style="display:block;max-height:300px;overflow-y:auto"></div>
         <div class="d-flex gap-2 flex-wrap" id="liveActions"></div>
       </section>
 
@@ -221,7 +223,7 @@
 
   <!-- POPUP OVERLAY -->
   <div id="popupOverlay" class="popup-overlay" style="display:none">
-    <div class="popup-card">
+    <div id="popupCard" class="popup-card">
       <div class="popup-header">
         <span id="popupTitle" class="popup-title"></span>
         <button class="btn btn-sm btn-close btn-close-white" onclick="closePopup()"></button>

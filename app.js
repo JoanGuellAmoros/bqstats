@@ -3,8 +3,8 @@ let activeGame = null;
 let activePlayerStats = {};
 let actionLog = [];
 let isEditing = false;
-let logVisible = false;
-let statsVisible = true;
+let logVisible = true;
+let statsVisible = false;
 let editingPlayerId = null;
 let statsMode = 'totals';
 let statsSortKey = null;
@@ -183,6 +183,8 @@ function openPopup(title, bodyHtml, footerHtml) {
 
 function closePopup() {
   document.getElementById('popupOverlay').style.display = 'none';
+  const card = document.getElementById('popupCard');
+  if (card) card.classList.remove('popup-wide');
 }
 
 function playerLabel(p) {
@@ -583,7 +585,7 @@ async function renderPlayers() {
     <li class="list-group-item d-flex align-items-center gap-2 px-2 py-2 player-item ${inactive ? 'player-inactive' : ''}">
       <input type="checkbox" class="player-check" value="${p.id}" onchange="togglePlayerSelection(${p.id})"${checked}>
       <div class="d-flex flex-column flex-grow-1">
-        <span>${p.number ? '<span class="text-primary fw-bold">#' + p.number + '</span> ' : ''}${esc(p.name)}${inactive ? ' <small class="text-secondary">(inactiu)</small>' : ''}</span>
+        <button class="btn btn-sm btn-link p-0 text-start player-name-link" title="Veure resum de partits" onclick="viewPlayerGames(${p.id})">${p.number ? '<span class="text-primary fw-bold">#' + p.number + '</span> ' : ''}${esc(p.name)}${inactive ? ' <small class="text-secondary">(inactiu)</small>' : ''}</button>
         <small class="text-secondary" style="${team ? 'color:var(--primary)!important' : ''}">${team ? esc(team.name) : 'Sense equip'}</small>
       </div>
       <button class="btn btn-sm ${inactive ? 'btn-outline-danger' : 'btn-outline-secondary'}" title="${inactive ? 'Inactiu (desmarcat en crear partit) - toca per activar' : 'Actiu - toca per marcar inactiu'}" onclick="togglePlayerActive(${p.id})">${inactive ? '&#128683;' : '&#128065;'}</button>
@@ -594,6 +596,133 @@ async function renderPlayers() {
     </li>`;
   }).join('');
   updatePlayersSel();
+}
+
+const pctNum = (a, b) => b ? (a / b * 100) : null;
+
+function summaryCols(withRival) {
+  const c = [
+    { key: 'pts', label: 'PTS', num: s => calcScore(s) },
+    ...(withRival ? [{ key: 'pntR', label: 'PTSR', num: s => (s._rival != null ? s._rival : null) }] : []),
+    { key: 'reb', label: 'REB', num: s => s.oReb + s.dReb },
+    { key: 'ast', label: 'AST', num: s => s.assists },
+    { key: 'twoM', label: '2PM', num: s => s.twoMade },
+    { key: 'twoI', label: '2PI', num: s => s.twoMissed },
+    { key: 'twoP', label: '2P%', pct: true, num: s => pctNum(s.twoMade, s.twoMissed) },
+    { key: 'threeM', label: '3PM', num: s => s.threeMade },
+    { key: 'threeI', label: '3PI', num: s => s.threeMissed },
+    { key: 'threeP', label: '3P%', pct: true, num: s => pctNum(s.threeMade, s.threeMissed) },
+    { key: 'ftM', label: 'TLM', num: s => s.ftMade },
+    { key: 'ftI', label: 'TLI', num: s => s.ftMissed },
+    { key: 'ftP', label: 'TL%', pct: true, num: s => pctNum(s.ftMade, s.ftMissed) },
+    { key: 'oReb', label: 'RO', num: s => s.oReb },
+    { key: 'dReb', label: 'RD', num: s => s.dReb },
+    { key: 'to', label: 'PERD', num: s => s.turnovers },
+    { key: 'st', label: 'REC', num: s => s.steals },
+    { key: 'blk', label: 'TAP', num: s => s.blocks },
+    { key: 'pf', label: 'FALT', num: s => s.pFouls },
+    { key: 'fr', label: 'FALTR', num: s => s.foulsReceived },
+    { key: 'ba', label: 'TAPR', num: s => s.blocksAgainst },
+    { key: 'val', label: 'VAL', num: s => calcVal(s) }
+  ];
+  return c;
+}
+
+function buildSummaryHtml(rows, cols) {
+  const maxes = {};
+  cols.forEach(c => maxes[c.key] = null);
+  rows.forEach(r => cols.forEach(c => {
+    const n = c.num(r.s);
+    if (n && (maxes[c.key] === null || n > maxes[c.key])) maxes[c.key] = n;
+  }));
+  if (!rows.length) return '<div class="text-center text-secondary py-4">No hi ha partits registrats</div>';
+  let html = '<div style="max-height:60vh;overflow:auto"><table class="table table-dark table-striped table-sm stats-table">';
+  html += '<thead><tr><th>Partit</th>' + cols.map(c => `<th>${c.label}</th>`).join('') + '</tr></thead><tbody>';
+  rows.forEach(r => {
+    html += `<tr><td class="player-name">${r.title}</td>`;
+    cols.forEach(c => {
+      const n = c.num(r.s);
+      const v = c.pct ? (n === null ? '-' : n.toFixed(1) + '%') : (n === null ? '-' : String(n));
+      const isMax = n && maxes[c.key] !== null && n === maxes[c.key];
+      html += `<td>${isMax ? `<strong class="text-success">${v}</strong>` : esc(v)}</td>`;
+    });
+    html += '</tr>';
+  });
+  html += '</tbody></table></div>';
+  return html;
+}
+
+async function viewPlayerGames(playerId) {
+  const player = await DB.get('players', playerId);
+  if (!player) return;
+  const allGames = await DB.getAll('games');
+  const games = allGames.filter(g => !g.isActive && (g.playerIds || []).includes(playerId));
+  const gameMap = {};
+  games.forEach(g => gameMap[g.id] = g);
+  const stats = (await DB.getAll('stats')).filter(s => s.playerId === playerId && gameMap[s.gameId]);
+  const fmtD = g => {
+    const d = new Date(g.date || g.timestamp);
+    return isNaN(d.getTime()) ? '?' : d.toLocaleDateString('ca-ES', { day: 'numeric', month: 'short', year: 'numeric' });
+  };
+  const rows = stats.map(s => {
+    const g = gameMap[s.gameId];
+    const title = `${fmtD(g)} &middot; ${esc(g.opponent)}${g.type ? ` &middot; ${esc(g.type)}` : ''}`;
+    return { game: g, s, title };
+  }).sort((a, b) => (b.game.date || b.game.timestamp || '').localeCompare(a.game.date || a.game.timestamp || ''));
+  const html = buildSummaryHtml(rows, summaryCols(false));
+  const wrap = document.getElementById('playerSummary');
+  wrap.innerHTML = `<div class="mb-2 d-flex flex-wrap align-items-center justify-content-between gap-2">
+      <div class="fs-5 fw-bold">Historial de ${esc(player.name)}</div>
+      <button class="btn btn-sm btn-outline-secondary" onclick="closePlayerSummary()">&#8592; Torna</button>
+    </div>${html}`;
+  document.getElementById('playerAddBox').style.display = 'none';
+  document.getElementById('playerFilterRow').style.display = 'none';
+  document.getElementById('playerList').style.display = 'none';
+  wrap.style.display = '';
+}
+
+function closePlayerSummary() {
+  document.getElementById('playerSummary').style.display = 'none';
+  document.getElementById('playerList').style.display = '';
+  renderPlayers();
+}
+
+async function viewTeamGames(teamId) {
+  const team = await DB.get('teams', teamId);
+  if (!team) return;
+  const allGames = await DB.getAll('games');
+  const games = allGames.filter(g => !g.isActive && Number(g.teamId) === Number(teamId));
+  const stats = (await DB.getAll('stats')).filter(s => games.some(g => g.id === s.gameId));
+  const byGame = {};
+  stats.forEach(s => {
+    if (!byGame[s.gameId]) byGame[s.gameId] = emptyStats();
+    Object.keys(byGame[s.gameId]).forEach(k => byGame[s.gameId][k] += s[k] || 0);
+  });
+  const fmtD = g => {
+    const d = new Date(g.date || g.timestamp);
+    return isNaN(d.getTime()) ? '?' : d.toLocaleDateString('ca-ES', { day: 'numeric', month: 'short', year: 'numeric' });
+  };
+  const rows = games.map(g => {
+    const base = byGame[g.id] ? { ...byGame[g.id] } : emptyStats();
+    base._rival = (g.rival1pt || 0) + (g.rival2pt || 0) * 2 + (g.rival3pt || 0) * 3;
+    const score = `${calcScore(base)}-${base._rival}`;
+    const title = `${fmtD(g)} &middot; ${esc(g.opponent)}${g.type ? ` &middot; ${esc(g.type)}` : ''} &middot; <span class="text-primary fw-bold">${score}</span>`;
+    return { game: g, s: base, title };
+  }).sort((a, b) => (b.game.date || b.game.timestamp || '').localeCompare(a.game.date || a.game.timestamp || ''));
+  const html = buildSummaryHtml(rows, summaryCols(true));
+  const wrap = document.getElementById('teamSummary');
+  wrap.innerHTML = `<div class="mb-2 d-flex flex-wrap align-items-center justify-content-between gap-2">
+      <div class="fs-5 fw-bold">Historial de ${esc(team.name)}</div>
+      <button class="btn btn-sm btn-outline-secondary" onclick="closeTeamSummary()">&#8592; Torna</button>
+    </div>${html}`;
+  document.getElementById('teamList').style.display = 'none';
+  wrap.style.display = '';
+}
+
+function closeTeamSummary() {
+  document.getElementById('teamSummary').style.display = 'none';
+  document.getElementById('teamList').style.display = '';
+  renderTeams();
 }
 
 async function togglePlayerActive(id) {
@@ -700,7 +829,7 @@ async function renderTeams() {
     const gCount = games.filter(g => g.teamId === t.id).length;
     return `
       <li class="list-group-item list-group-item-action d-flex flex-wrap align-items-center justify-content-between gap-2 px-2 py-2">
-        <span>${esc(t.name)}</span>
+        <button class="btn btn-sm btn-link p-0 text-start player-name-link" title="Veure resum de partits" onclick="viewTeamGames(${t.id})">${esc(t.name)}</button>
         <div class="d-flex align-items-center gap-2 flex-wrap">
           <small class="text-secondary">${pCount} jug &middot; ${gCount} partits</small>
           <div class="btn-group btn-group-sm">
@@ -871,6 +1000,10 @@ async function startGame() {
 async function renderLiveGame() {
   if (!activeGame) return;
   updateSideButton();
+  document.getElementById('liveActionLog').style.display = logVisible ? 'block' : 'none';
+  document.getElementById('btnToggleLog').innerHTML = '&#128220; ' + (logVisible ? 'Amagar' : 'Mostrar');
+  document.getElementById('liveStats').style.display = statsVisible ? '' : 'none';
+  document.getElementById('btnToggleStats').innerHTML = statsVisible ? '&#128200; Amagar' : '&#128200; Mostrar';
 
   const players = await DB.getAll('players');
   const playerMap = {};
@@ -1282,8 +1415,13 @@ async function getRecordBaselines() {
   });
   const bl = { pl: {}, te: {}, plq: {}, teq: {} };
   const upd = (obj, key, v) => { if (v === undefined || v === null) return; if (!(key in obj) || v > obj[key]) obj[key] = v; };
+  const updPl = (map, pid, key, v) => {
+    if (v === undefined || v === null) return;
+    if (!map[pid]) map[pid] = {};
+    if (!(key in map[pid]) || v > map[pid][key]) map[pid][key] = v;
+  };
   RECORD_METRICS.forEach(m => {
-    if (m.gPl) stats.forEach(s => upd(bl.pl, m.key, m.gPl(s)));
+    if (m.gPl) stats.forEach(s => updPl(bl.pl, s.playerId, m.key, m.gPl(s)));
     if (m.gTe) Object.entries(scoreMap).forEach(([gid, t]) => {
       const g = gameMap[gid];
       const rival = (g.rival1pt || 0) + (g.rival2pt || 0) * 2 + (g.rival3pt || 0) * 3;
@@ -1314,7 +1452,7 @@ async function getRecordBaselines() {
       };
       RECORD_METRICS.forEach(m => {
         if (m.qTe) upd(bl.teq, m.key, m.qTe(team));
-        if (m.qPl) players.forEach(pl => upd(bl.plq, m.key, m.qPl(pl)));
+        if (m.qPl) Object.entries(p.players).forEach(([pid, pl]) => updPl(bl.plq, pid, m.key, m.qPl(pl)));
       });
     });
   });
@@ -1323,16 +1461,10 @@ async function getRecordBaselines() {
 }
 
 function recBadge(teamLevel, isQuarter, abb, value) {
-  const who = teamLevel ? 'E' : 'J';
-  const valueStr = (isQuarter && value !== undefined) ? ` ${value}` : '';
-  if (teamLevel) {
-    return isQuarter
-      ? `<span class="badge text-dark" style="background:#f39c12">*R&Egrave;CORD* E ${abb}${valueStr}</span>`
-      : `<span class="badge bg-warning text-dark">*R&Egrave;CORD* E ${abb}</span>`;
-  }
-  return isQuarter
-    ? `<span class="badge bg-info text-dark">*R&Egrave;CORD* J ${abb}${valueStr}</span>`
-    : `<span class="badge bg-success">*R&Egrave;CORD* J ${abb}</span>`;
+  const who = teamLevel ? 'Equip' : 'Jugador';
+  const scope = isQuarter ? 'Quart' : 'Partit';
+  const valueStr = value !== undefined ? ` (${value})` : '';
+  return `<span class="badge bg-warning text-dark">*R&Egrave;CORD* ${who} - ${scope} - ${abb}${valueStr}</span>`;
 }
 
 async function computeLiveRecordFlags() {
@@ -1387,17 +1519,17 @@ async function computeLiveRecordFlags() {
       const afterT = teamView(teamCur, rival);
       const afterQT = qTeamView(qTeams[period]);
       RECORD_METRICS.forEach(m => {
-        if (m.gPl && (m.key in bl.pl)) {
+        if (m.gPl && bl.pl[e.playerId] && (m.key in bl.pl[e.playerId])) {
           const a = m.gPl(afterP), b = m.gPl(beforeP);
-          if (!seenPl[m.key] && b <= bl.pl[m.key] && a > bl.pl[m.key]) { seenPl[m.key] = true; badges.push(recBadge(false, false, m.abb)); }
+          if (!seenPl[m.key] && b <= bl.pl[e.playerId][m.key] && a > bl.pl[e.playerId][m.key]) { seenPl[m.key] = true; badges.push(recBadge(false, false, m.abb, a)); }
         }
         if (m.gTe && (m.key in bl.te)) {
           const a = m.gTe(teamCur, rival), b = m.gTe(beforeT, beforeR);
-          if (!seenTe[m.key] && b <= bl.te[m.key] && a > bl.te[m.key]) { seenTe[m.key] = true; badges.push(recBadge(true, false, m.abb)); }
+          if (!seenTe[m.key] && b <= bl.te[m.key] && a > bl.te[m.key]) { seenTe[m.key] = true; badges.push(recBadge(true, false, m.abb, a)); }
         }
-        if (m.qPl && (m.key in bl.plq)) {
+        if (m.qPl && bl.plq[e.playerId] && (m.key in bl.plq[e.playerId])) {
           const a = m.qPl(afterQ), b = m.qPl(beforeQ);
-          if (!seenPlq[m.key] && b <= bl.plq[m.key] && a > bl.plq[m.key]) { seenPlq[m.key] = true; badges.push(recBadge(false, true, m.abb, a)); }
+          if (!seenPlq[m.key] && b <= bl.plq[e.playerId][m.key] && a > bl.plq[e.playerId][m.key]) { seenPlq[m.key] = true; badges.push(recBadge(false, true, m.abb, a)); }
         }
         if (m.qTe && (m.key in bl.teq)) {
           const a = m.qTe(afterQT), b = m.qTe(beforeQT);
@@ -1417,11 +1549,11 @@ async function computeLiveRecordFlags() {
       RECORD_METRICS.forEach(m => {
         if (m.gTe && (m.key in bl.te)) {
           const a = m.gTe(teamCur, rival), b = m.gTe(beforeT, beforeR);
-          if (!seenTe[m.key] && b <= bl.te[m.key] && a > bl.te[m.key]) { seenTe[m.key] = true; badges.push(recBadge(true, false, m.abb)); }
+          if (!seenTe[m.key] && b <= bl.te[m.key] && a > bl.te[m.key]) { seenTe[m.key] = true; badges.push(recBadge(true, false, m.abb, a)); }
         }
         if (m.qTe && (m.key in bl.teq)) {
           const a = m.qTe(afterQT), b = m.qTe(beforeQT);
-          if (!seenTeq[m.key] && b <= bl.teq[m.key] && a > bl.teq[m.key]) { seenTeq[m.key] = true; badges.push(recBadge(true, true, m.abb)); }
+          if (!seenTeq[m.key] && b <= bl.teq[m.key] && a > bl.teq[m.key]) { seenTeq[m.key] = true; badges.push(recBadge(true, true, m.abb, a)); }
         }
       });
     }
@@ -1945,17 +2077,19 @@ function renderDetailPlays(game, playerMap, homeSide) {
 
   html += '<div class="chat-log">';
 
-  const filtered = detailQuarterFilter === null ? game.actions : game.actions.filter(a => a.period === detailQuarterFilter);
-  filtered.forEach(a => {
+  game.actions.forEach((a, idx) => {
+    if (detailQuarterFilter !== null && a.period !== detailQuarterFilter) return;
     const qStr = a.period ? (a.period <= periods ? `Q${a.period}` : `P${a.period - periods}`) : '?';
     const scoreStr = (a.teamScore !== undefined && a.rivalScore !== undefined) ? logScoreStr(a.teamScore, a.rivalScore, game.isHome !== false) : '';
+    const isBasket = a.playerId !== undefined && a.playerId !== -1 && basketKindOf(a.fields) !== null;
+    const qNode = `<span class="chat-q${isBasket ? ' clickable' : ''}"${isBasket ? ` onclick="editDetailBasket(${idx})" title="Editar cistella"` : ''}>${qStr}</span>`;
 
     if (a.type === 'addPlayer') {
       const p = playerMap[a.playerId];
       const label = p ? abbrevName(p) : '#' + a.playerId;
       html += `<div class="chat-row local">
         <div class="chat-left"><span class="chat-player">${esc(label)}</span> <span class="chat-action">afegit al partit</span></div>
-        <div class="chat-center"><span class="chat-q">${qStr}</span> <span class="chat-score">${scoreStr}</span></div>
+        <div class="chat-center">${qNode} <span class="chat-score">${scoreStr}</span></div>
         <div class="chat-right"></div>
       </div>`;
       return;
@@ -1968,28 +2102,26 @@ function renderDetailPlays(game, playerMap, homeSide) {
       const inLabel = pIn ? abbrevName(pIn) : '#' + a.inId;
       html += `<div class="chat-row local">
         <div class="chat-left"><span class="chat-player">${esc(outLabel)}</span> <span class="chat-action">surt</span> &middot; <span class="chat-player">${esc(inLabel)}</span> <span class="chat-action">entra</span></div>
-        <div class="chat-center"><span class="chat-q">${qStr}</span> <span class="chat-score">${scoreStr}</span></div>
+        <div class="chat-center">${qNode} <span class="chat-score">${scoreStr}</span></div>
         <div class="chat-right"></div>
       </div>`;
       return;
     }
 
     if (a.playerId === -1) {
-      // Visitor action
       const pts = a.text || a.fields[0] || '+';
       html += `<div class="chat-row visitor">
         <div class="chat-left"></div>
-        <div class="chat-center"><span class="chat-q">${qStr}</span> <span class="chat-score">${scoreStr}</span></div>
+        <div class="chat-center">${qNode} <span class="chat-score">${scoreStr}</span></div>
         <div class="chat-right"><span class="chat-action">${esc(pts)}</span></div>
       </div>`;
     } else {
-      // Local action
       const p = playerMap[a.playerId];
       const label = p ? abbrevName(p) : '#' + a.playerId;
       const texts = a.text || (a.fields || []).map(f => STAT_NAMES[f] || f).join(' + ') || 'acció';
       html += `<div class="chat-row local">
         <div class="chat-left"><span class="chat-player">${esc(label)}</span> <span class="chat-action">${esc(texts)}</span></div>
-        <div class="chat-center"><span class="chat-q">${qStr}</span> <span class="chat-score">${scoreStr}</span></div>
+        <div class="chat-center">${qNode} <span class="chat-score">${scoreStr}</span></div>
         <div class="chat-right"></div>
       </div>`;
     }
@@ -1997,6 +2129,64 @@ function renderDetailPlays(game, playerMap, homeSide) {
 
   html += '</div>';
   container.innerHTML = html;
+}
+
+function editDetailBasket(idx) {
+  const game = cachedDetailGame;
+  const action = game && game.actions[idx];
+  if (!action || basketKindOf(action.fields) === null) return;
+  const current = BASKET_FIELDS[basketKindOf(action.fields)];
+  const btn = (kind, label) => `<button class="btn btn-outline-primary flex-fill ${basketKindOf(action.fields) === kind ? 'active' : ''}" onclick="replaceDetailBasket(${idx}, '${kind}')">${label}</button>`;
+  const body = `<div class="small text-secondary mb-2">Substitueix la cistella (actual: ${current.text}) per:</div>
+    <div class="d-flex gap-2">${btn('t1', 'T1 (1p)')}${btn('t2', 'T2 (2p)')}${btn('t3', 'T3 (3p)')}</div>`;
+  openPopup('Editar cistella', body, `<button class="btn btn-outline-secondary" onclick="closePopup()">Cancel·lar</button>`);
+}
+
+async function replaceDetailBasket(idx, kind) {
+  const game = cachedDetailGame;
+  if (!game) return;
+  const action = game.actions[idx];
+  const oldKind = basketKindOf(action && action.fields);
+  const newB = BASKET_FIELDS[kind];
+  if (!action || oldKind === null || !newB || oldKind === kind) {
+    closePopup();
+    return;
+  }
+  const oldB = BASKET_FIELDS[oldKind];
+  const stats = await DB.getByIndex('stats', 'gameId', game.id);
+  const row = stats.find(s => s.playerId === action.playerId);
+  if (row) {
+    if (row[oldB.made] > 0) row[oldB.made]--;
+    if (row[oldB.missed] > 0) row[oldB.missed]--;
+    row[newB.made]++;
+    row[newB.missed]++;
+    await DB.put('stats', row);
+  }
+  action.fields = [newB.made, newB.missed];
+  action.text = newB.text;
+  let team = 0;
+  let rival = 0;
+  game.actions.forEach(a => {
+    if (a.type === 'addPlayer' || a.type === 'sub') { a.teamScore = team; a.rivalScore = rival; return; }
+    if (a.playerId === -1) {
+      rival += parseInt(a.fields && a.fields[0]) || 0;
+      a.teamScore = team;
+      a.rivalScore = rival;
+      return;
+    }
+    (a.fields || []).forEach(f => {
+      if (f === 'twoMade') team += 2;
+      else if (f === 'threeMade') team += 3;
+      else if (f === 'ftMade') team += 1;
+    });
+    a.teamScore = team;
+    a.rivalScore = rival;
+  });
+  await DB.put('games', game);
+  closePopup();
+  invalidateRecordBaselines();
+  renderHistory();
+  await viewGameDetail(game.id);
 }
 
 function setDetailQuarter(q, gameId) {
@@ -2382,11 +2572,14 @@ async function renderRecords() {
 
   const isBadRec = label => /fallats|Perdudes|Taps rebuts|Punts rebuts|Faltes fetes/.test(label);
 
-  const addRow = (group, label, value, sub) => groups[group].push(`<li class="list-group-item d-flex align-items-center gap-2 px-2 py-2">
+  const addRow = (group, label, value, sub) => {
+    const isZero = value === 0;
+    groups[group].push(`<li class="list-group-item d-flex align-items-center gap-2 px-2 py-2">
       <span class="fw-semibold" style="flex:none;width:150px">${label}</span>
-      <span class="badge ${isBadRec(label) ? 'bg-danger' : 'bg-success'} text-nowrap" style="flex:none;width:56px;text-align:center">${value}</span>
-      <span class="small text-secondary" style="flex:1;min-width:0">${sub}</span>
+      <span class="badge ${isBadRec(label) ? 'bg-danger' : 'bg-success'} text-nowrap" style="flex:none;width:56px;text-align:center">${isZero ? '-' : value}</span>
+      <span class="small text-secondary" style="flex:1;min-width:0">${isZero ? 'cap jugador' : sub}</span>
     </li>`);
+  };
 
   if (stats.length === 0) {
     container.innerHTML = '<div class="text-center text-secondary py-4">&#127942;<br>No hi ha records encara</div>';
