@@ -141,7 +141,13 @@
             <button class="btn btn-sm btn-secondary live-toggle-btn" id="btnToggleLog" onclick="toggleActionLog()">&#128220; Amagar</button>
           </div>
         </div>
-        <div class="stats-scroll">
+        <div class="stats-scroll" id="statsScroller" style="display:none">
+          <div class="d-flex justify-content-end mb-1" id="liveStatsViewToggle">
+            <div class="btn-group btn-group-sm" role="group" aria-label="Vista d'estadistiques">
+              <button class="btn btn-outline-secondary active" id="btnStatsTotal" onclick="setLiveStatsView('total')">Totals</button>
+              <button class="btn btn-outline-secondary" id="btnStatsQuarter" onclick="setLiveStatsView('quarter')">Quart actual</button>
+            </div>
+          </div>
           <div class="live-stats mb-2" id="liveStats"></div>
         </div>
         <div class="live-action-log border border-secondary rounded p-2 mb-2" id="liveActionLog" style="display:block;max-height:300px;overflow-y:auto"></div>

@@ -5,6 +5,7 @@ let actionLog = [];
 let isEditing = false;
 let logVisible = true;
 let statsVisible = false;
+let liveStatsMode = 'total';
 let editingPlayerId = null;
 let statsMode = 'totals';
 let statsSortKey = null;
@@ -1002,8 +1003,17 @@ async function renderLiveGame() {
   updateSideButton();
   document.getElementById('liveActionLog').style.display = logVisible ? 'block' : 'none';
   document.getElementById('btnToggleLog').innerHTML = '&#128220; ' + (logVisible ? 'Amagar' : 'Mostrar');
-  document.getElementById('liveStats').style.display = statsVisible ? '' : 'none';
+  document.getElementById('liveStats').style.display = '';
+  document.getElementById('liveStatsViewToggle').style.display = 'flex';
+  const statsScroller = document.getElementById('statsScroller');
+  if (statsScroller) statsScroller.style.display = statsVisible ? '' : 'none';
   document.getElementById('btnToggleStats').innerHTML = statsVisible ? '&#128200; Amagar' : '&#128200; Mostrar';
+  const totalBtn = document.getElementById('btnStatsTotal');
+  const quarterBtn = document.getElementById('btnStatsQuarter');
+  if (totalBtn && quarterBtn) {
+    totalBtn.classList.toggle('active', liveStatsMode === 'total');
+    quarterBtn.classList.toggle('active', liveStatsMode === 'quarter');
+  }
 
   const players = await DB.getAll('players');
   const playerMap = {};
@@ -1071,6 +1081,17 @@ function selectPlayerTab(pid) {
   if (btn) btn.classList.add('active');
 }
 
+function quarterPlayerStats(period) {
+  const per = {};
+  actionLog.forEach(a => {
+    if (a.playerId === -1 || a.type === 'sub' || a.type === 'addPlayer') return;
+    if (a.period !== period) return;
+    if (!per[a.playerId]) per[a.playerId] = { ...emptyStats(), playerId: a.playerId };
+    (a.fields || []).forEach(f => per[a.playerId][f]++);
+  });
+  return per;
+}
+
 async function renderLiveStats(playerMap) {
   if (!playerMap) {
     const players = await DB.getAll('players');
@@ -1088,12 +1109,16 @@ async function renderLiveStats(playerMap) {
 
   const totalRow = emptyStats();
   const court = onCourtIds();
+  const totalLabel = liveStatsMode === 'quarter'
+    ? `QUART ${activeGame.currentPeriod} (${periodLabel(activeGame.currentPeriod, activeGame.periods)})`
+    : 'TOTAL';
   const numOf = pid => {
     const p = playerMap[pid];
     const n = p && p.number !== '' && p.number != null ? parseInt(p.number) : null;
     return n;
   };
-  const sorted = activeGame.playerIds.map(pid => activePlayerStats[pid]).filter(Boolean)
+  const sortedStatRows = liveStatsMode === 'quarter' ? quarterPlayerStats(activeGame.currentPeriod) : activePlayerStats;
+  const sorted = activeGame.playerIds.map(pid => sortedStatRows[pid]).filter(Boolean)
     .sort((a, b) => {
       const aOn = court.includes(a.playerId) ? 0 : 1;
       const bOn = court.includes(b.playerId) ? 0 : 1;
@@ -1136,7 +1161,7 @@ async function renderLiveStats(playerMap) {
   const totalPts = calcScore(totalRow);
   const totalVal = calcVal(totalRow);
   const totalReb = totalRow.oReb + totalRow.dReb;
-  html += `<tr class="total-row"><td class="player-name">TOTAL</td>`;
+  html += `<tr class="total-row"><td class="player-name">${totalLabel}</td>`;
   html += `<td>${totalPts}</td><td>${totalReb}</td><td>${totalRow.assists}</td><td class="${totalVal >= 0 ? 'val-pos' : 'val-neg'}">${totalVal}</td>`;
   html += `<td>${totalRow.ftMade}/${totalRow.ftMissed}</td><td>${pct(totalRow.ftMade, totalRow.ftMissed)}</td>`;
   html += `<td>${totalRow.twoMade}/${totalRow.twoMissed}</td><td>${pct(totalRow.twoMade, totalRow.twoMissed)}</td>`;
@@ -1345,9 +1370,18 @@ function toggleActionLog() {
 
 function toggleStats() {
   statsVisible = !statsVisible;
-  const el = document.getElementById('liveStats');
-  el.style.display = statsVisible ? 'block' : 'none';
   document.getElementById('btnToggleStats').innerHTML = statsVisible ? '&#128200; Amagar' : '&#128200; Mostrar';
+  const scroller = document.getElementById('statsScroller');
+  if (scroller) scroller.style.display = statsVisible ? 'block' : 'none';
+}
+
+function setLiveStatsView(mode) {
+  liveStatsMode = mode;
+  const totalBtn = document.getElementById('btnStatsTotal');
+  const quarterBtn = document.getElementById('btnStatsQuarter');
+  if (totalBtn) totalBtn.classList.toggle('active', mode === 'total');
+  if (quarterBtn) quarterBtn.classList.toggle('active', mode === 'quarter');
+  renderLiveStats();
 }
 
 function Qempty() {
