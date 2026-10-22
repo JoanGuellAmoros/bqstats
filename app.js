@@ -1430,6 +1430,10 @@ const RECORD_METRICS = [
 
 let recordBaselinesCache = null;
 
+function teamKeyOf(g) {
+  return g && g.teamId != null ? 'id:' + g.teamId : 'name:' + ((g && g.team) || '');
+}
+
 function invalidateRecordBaselines() {
   recordBaselinesCache = null;
 }
@@ -1447,7 +1451,7 @@ async function getRecordBaselines() {
     if (!scoreMap[s.gameId]) scoreMap[s.gameId] = emptyStats();
     Object.keys(scoreMap[s.gameId]).forEach(k => scoreMap[s.gameId][k] += s[k]);
   });
-  const bl = { pl: {}, te: {}, plq: {}, teq: {} };
+  const bl = { pl: {}, te: {}, plq: {}, teq: {}, tpl: {}, tplq: {} };
   const upd = (obj, key, v) => { if (v === undefined || v === null) return; if (!(key in obj) || v > obj[key]) obj[key] = v; };
   const updPl = (map, pid, key, v) => {
     if (v === undefined || v === null) return;
@@ -1455,14 +1459,23 @@ async function getRecordBaselines() {
     if (!(key in map[pid]) || v > map[pid][key]) map[pid][key] = v;
   };
   RECORD_METRICS.forEach(m => {
-    if (m.gPl) stats.forEach(s => updPl(bl.pl, s.playerId, m.key, m.gPl(s)));
+    if (m.gPl) stats.forEach(s => {
+      const g = gameMap[s.gameId];
+      const tk = teamKeyOf(g);
+      updPl(bl.pl, s.playerId, m.key, m.gPl(s));
+      if (!bl.tpl[tk]) bl.tpl[tk] = {};
+      updPl(bl.tpl[tk], s.playerId, m.key, m.gPl(s));
+    });
     if (m.gTe) Object.entries(scoreMap).forEach(([gid, t]) => {
       const g = gameMap[gid];
+      const tk = teamKeyOf(g);
       const rival = (g.rival1pt || 0) + (g.rival2pt || 0) * 2 + (g.rival3pt || 0) * 3;
-      upd(bl.te, m.key, m.gTe(t, rival));
+      if (!bl.te[tk]) bl.te[tk] = {};
+      upd(bl.te[tk], m.key, m.gTe(t, rival));
     });
   });
   finished.forEach(g => {
+    const tk = teamKeyOf(g);
     const per = {};
     (g.actions || []).forEach(a => {
       if (a.type === 'sub' || a.type === 'addPlayer') return;
@@ -1485,8 +1498,15 @@ async function getRecordBaselines() {
         tw: sum('tw'), t3: sum('t3'), t1: sum('t1'), a2: sum('a2'), a3: sum('a3'), a1: sum('a1')
       };
       RECORD_METRICS.forEach(m => {
-        if (m.qTe) upd(bl.teq, m.key, m.qTe(team));
-        if (m.qPl) Object.entries(p.players).forEach(([pid, pl]) => updPl(bl.plq, pid, m.key, m.qPl(pl)));
+        if (m.qTe) {
+          if (!bl.teq[tk]) bl.teq[tk] = {};
+          upd(bl.teq[tk], m.key, m.qTe(team));
+        }
+        if (m.qPl) Object.entries(p.players).forEach(([pid, pl]) => {
+          updPl(bl.plq, pid, m.key, m.qPl(pl));
+          if (!bl.tplq[tk]) bl.tplq[tk] = {};
+          updPl(bl.tplq[tk], pid, m.key, m.qPl(pl));
+        });
       });
     });
   });
@@ -1494,18 +1514,31 @@ async function getRecordBaselines() {
   return recordBaselinesCache;
 }
 
-function recBadge(teamLevel, isQuarter, abb, value) {
-  const who = teamLevel ? 'Equip' : 'Jugador';
+function recBadge(kind, isQuarter, abb, value) {
+  const who = kind === 'team' ? 'Equip' : kind === 'tplayer' ? 'Jugador equip' : 'Personal';
   const scope = isQuarter ? 'Quart' : 'Partit';
   const valueStr = value !== undefined ? ` (${value})` : '';
   return `<span class="badge bg-warning text-dark">*R&Egrave;CORD* ${who} - ${scope} - ${abb}${valueStr}</span>`;
+}
+
+function teamPlayerMax(map, key) {
+  let mx = null;
+  Object.entries(map).forEach(([, vals]) => {
+    if (vals && (key in vals) && (mx === null || vals[key] > mx)) mx = vals[key];
+  });
+  return mx;
 }
 
 async function computeLiveRecordFlags() {
   const flags = {};
   if (!actionLog.length) return flags;
   const bl = await getRecordBaselines();
-  if (!Object.keys(bl.pl).length && !Object.keys(bl.te).length && !Object.keys(bl.plq).length && !Object.keys(bl.teq).length) return flags;
+  if (!Object.keys(bl.pl).length && !Object.keys(bl.plq).length && !Object.keys(bl.te).length && !Object.keys(bl.teq).length) return flags;
+  const tk = teamKeyOf(activeGame);
+  const teamBase = bl.te[tk] || {};
+  const teamQBase = bl.teq[tk] || {};
+  const teamPlBase = bl.tpl[tk] || {};
+  const teamPlQBase = bl.tplq[tk] || {};
   const plCur = {};
   const teamCur = emptyStats();
   let rival = 0;
@@ -1515,6 +1548,8 @@ async function computeLiveRecordFlags() {
   const seenTe = {};
   const seenPlq = {};
   const seenTeq = {};
+  const seenTp = {};
+  const seenTpq = {};
   const teamView = (t, r) => ({
     teamPts: calcScore(t), rivalPts: r, total: calcScore(t) + r, marge: calcScore(t) - r,
     rebT: t.oReb + t.dReb, rebO: t.oReb, rebD: t.dReb,
@@ -1553,21 +1588,35 @@ async function computeLiveRecordFlags() {
       const afterT = teamView(teamCur, rival);
       const afterQT = qTeamView(qTeams[period]);
       RECORD_METRICS.forEach(m => {
-        if (m.gPl && bl.pl[e.playerId] && (m.key in bl.pl[e.playerId])) {
-          const a = m.gPl(afterP), b = m.gPl(beforeP);
-          if (!seenPl[m.key] && b <= bl.pl[e.playerId][m.key] && a > bl.pl[e.playerId][m.key]) { seenPl[m.key] = true; badges.push(recBadge(false, false, m.abb, a)); }
+        if (m.gPl) {
+          if (bl.pl[e.playerId] && (m.key in bl.pl[e.playerId])) {
+            const a = m.gPl(afterP), b = m.gPl(beforeP);
+            if (!seenPl[m.key] && b <= bl.pl[e.playerId][m.key] && a > bl.pl[e.playerId][m.key]) { seenPl[m.key] = true; badges.push(recBadge('personal', false, m.abb, a)); }
+          }
+          const otherG = teamPlayerMax(teamPlBase, m.key);
+          if (otherG !== null) {
+            const a = m.gPl(afterP), b = m.gPl(beforeP);
+            if (!seenTp[m.key] && b <= otherG && a > otherG) { seenTp[m.key] = true; badges.push(recBadge('tplayer', false, m.abb, a)); }
+          }
         }
-        if (m.gTe && (m.key in bl.te)) {
+        if (m.qPl) {
+          if (bl.plq[e.playerId] && (m.key in bl.plq[e.playerId])) {
+            const a = m.qPl(afterQ), b = m.qPl(beforeQ);
+            if (!seenPlq[m.key] && b <= bl.plq[e.playerId][m.key] && a > bl.plq[e.playerId][m.key]) { seenPlq[m.key] = true; badges.push(recBadge('personal', true, m.abb, a)); }
+          }
+          const otherQ = teamPlayerMax(teamPlQBase, m.key);
+          if (otherQ !== null) {
+            const a = m.qPl(afterQ), b = m.qPl(beforeQ);
+            if (!seenTpq[m.key] && b <= otherQ && a > otherQ) { seenTpq[m.key] = true; badges.push(recBadge('tplayer', true, m.abb, a)); }
+          }
+        }
+        if (m.gTe && (m.key in teamBase)) {
           const a = m.gTe(teamCur, rival), b = m.gTe(beforeT, beforeR);
-          if (!seenTe[m.key] && b <= bl.te[m.key] && a > bl.te[m.key]) { seenTe[m.key] = true; badges.push(recBadge(true, false, m.abb, a)); }
+          if (!seenTe[m.key] && b <= teamBase[m.key] && a > teamBase[m.key]) { seenTe[m.key] = true; badges.push(recBadge('team', false, m.abb, a)); }
         }
-        if (m.qPl && bl.plq[e.playerId] && (m.key in bl.plq[e.playerId])) {
-          const a = m.qPl(afterQ), b = m.qPl(beforeQ);
-          if (!seenPlq[m.key] && b <= bl.plq[e.playerId][m.key] && a > bl.plq[e.playerId][m.key]) { seenPlq[m.key] = true; badges.push(recBadge(false, true, m.abb, a)); }
-        }
-        if (m.qTe && (m.key in bl.teq)) {
+        if (m.qTe && (m.key in teamQBase)) {
           const a = m.qTe(afterQT), b = m.qTe(beforeQT);
-          if (!seenTeq[m.key] && b <= bl.teq[m.key] && a > bl.teq[m.key]) { seenTeq[m.key] = true; badges.push(recBadge(true, true, m.abb, a)); }
+          if (!seenTeq[m.key] && b <= teamQBase[m.key] && a > teamQBase[m.key]) { seenTeq[m.key] = true; badges.push(recBadge('team', true, m.abb, a)); }
         }
       });
     } else if (e.playerId === -1) {
@@ -1581,13 +1630,13 @@ async function computeLiveRecordFlags() {
       const afterQT = qTeamView(qTeams[period]);
       const beforeT = teamCur;
       RECORD_METRICS.forEach(m => {
-        if (m.gTe && (m.key in bl.te)) {
+        if (m.gTe && (m.key in teamBase)) {
           const a = m.gTe(teamCur, rival), b = m.gTe(beforeT, beforeR);
-          if (!seenTe[m.key] && b <= bl.te[m.key] && a > bl.te[m.key]) { seenTe[m.key] = true; badges.push(recBadge(true, false, m.abb, a)); }
+          if (!seenTe[m.key] && b <= teamBase[m.key] && a > teamBase[m.key]) { seenTe[m.key] = true; badges.push(recBadge('team', false, m.abb, a)); }
         }
-        if (m.qTe && (m.key in bl.teq)) {
+        if (m.qTe && (m.key in teamQBase)) {
           const a = m.qTe(afterQT), b = m.qTe(beforeQT);
-          if (!seenTeq[m.key] && b <= bl.teq[m.key] && a > bl.teq[m.key]) { seenTeq[m.key] = true; badges.push(recBadge(true, true, m.abb, a)); }
+          if (!seenTeq[m.key] && b <= teamQBase[m.key] && a > teamQBase[m.key]) { seenTeq[m.key] = true; badges.push(recBadge('team', true, m.abb, a)); }
         }
       });
     }
