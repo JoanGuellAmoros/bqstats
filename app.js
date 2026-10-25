@@ -12,6 +12,7 @@ let statsSortKey = null;
 let statsSortAsc = true;
 let detailQuarterFilter = null;
 let gameSelection = new Set();
+let endGameReviewResolve = null;
 
 const STAT_LABELS = {
   twoMade: '2PM', twoMissed: '2PI', threeMade: '3PM', threeMissed: '3PI',
@@ -186,6 +187,11 @@ function closePopup() {
   document.getElementById('popupOverlay').style.display = 'none';
   const card = document.getElementById('popupCard');
   if (card) card.classList.remove('popup-wide');
+  if (endGameReviewResolve) {
+    const resolve = endGameReviewResolve;
+    endGameReviewResolve = null;
+    resolve({ proceed: false, removeIds: [] });
+  }
 }
 
 function playerLabel(p) {
@@ -990,6 +996,7 @@ async function startGame() {
     return;
   }
   activeGame.onCourtPlayerIds = lineup;
+  activeGame.startingPlayerIds = lineup.slice();
   await DB.put('games', activeGame);
   currentPlayerTab = lineup[0] || null;
 
@@ -1451,7 +1458,7 @@ async function getRecordBaselines() {
     if (!scoreMap[s.gameId]) scoreMap[s.gameId] = emptyStats();
     Object.keys(scoreMap[s.gameId]).forEach(k => scoreMap[s.gameId][k] += s[k]);
   });
-  const bl = { pl: {}, te: {}, plq: {}, teq: {}, tpl: {}, tplq: {} };
+  const bl = { pl: {}, te: {}, plq: {}, teq: {} };
   const upd = (obj, key, v) => { if (v === undefined || v === null) return; if (!(key in obj) || v > obj[key]) obj[key] = v; };
   const updPl = (map, pid, key, v) => {
     if (v === undefined || v === null) return;
@@ -1460,11 +1467,7 @@ async function getRecordBaselines() {
   };
   RECORD_METRICS.forEach(m => {
     if (m.gPl) stats.forEach(s => {
-      const g = gameMap[s.gameId];
-      const tk = teamKeyOf(g);
       updPl(bl.pl, s.playerId, m.key, m.gPl(s));
-      if (!bl.tpl[tk]) bl.tpl[tk] = {};
-      updPl(bl.tpl[tk], s.playerId, m.key, m.gPl(s));
     });
     if (m.gTe) Object.entries(scoreMap).forEach(([gid, t]) => {
       const g = gameMap[gid];
@@ -1504,8 +1507,6 @@ async function getRecordBaselines() {
         }
         if (m.qPl) Object.entries(p.players).forEach(([pid, pl]) => {
           updPl(bl.plq, pid, m.key, m.qPl(pl));
-          if (!bl.tplq[tk]) bl.tplq[tk] = {};
-          updPl(bl.tplq[tk], pid, m.key, m.qPl(pl));
         });
       });
     });
@@ -1515,18 +1516,10 @@ async function getRecordBaselines() {
 }
 
 function recBadge(kind, isQuarter, abb, value) {
-  const who = kind === 'team' ? 'Equip' : kind === 'tplayer' ? 'Jugador equip' : 'Personal';
+  const who = kind === 'team' ? 'Equip' : 'Personal';
   const scope = isQuarter ? 'Quart' : 'Partit';
   const valueStr = value !== undefined ? ` (${value})` : '';
   return `<span class="badge bg-warning text-dark">*R&Egrave;CORD* ${who} - ${scope} - ${abb}${valueStr}</span>`;
-}
-
-function teamPlayerMax(map, key) {
-  let mx = null;
-  Object.entries(map).forEach(([, vals]) => {
-    if (vals && (key in vals) && (mx === null || vals[key] > mx)) mx = vals[key];
-  });
-  return mx;
 }
 
 async function computeLiveRecordFlags() {
@@ -1537,8 +1530,6 @@ async function computeLiveRecordFlags() {
   const tk = teamKeyOf(activeGame);
   const teamBase = bl.te[tk] || {};
   const teamQBase = bl.teq[tk] || {};
-  const teamPlBase = bl.tpl[tk] || {};
-  const teamPlQBase = bl.tplq[tk] || {};
   const plCur = {};
   const teamCur = emptyStats();
   let rival = 0;
@@ -1548,8 +1539,6 @@ async function computeLiveRecordFlags() {
   const seenTe = {};
   const seenPlq = {};
   const seenTeq = {};
-  const seenTp = {};
-  const seenTpq = {};
   const teamView = (t, r) => ({
     teamPts: calcScore(t), rivalPts: r, total: calcScore(t) + r, marge: calcScore(t) - r,
     rebT: t.oReb + t.dReb, rebO: t.oReb, rebD: t.dReb,
@@ -1589,32 +1578,24 @@ async function computeLiveRecordFlags() {
       const afterQT = qTeamView(qTeams[period]);
       RECORD_METRICS.forEach(m => {
         if (m.gPl) {
-          if (bl.pl[e.playerId] && (m.key in bl.pl[e.playerId])) {
+          const base = bl.pl[e.playerId] ? bl.pl[e.playerId][m.key] : undefined;
+          if (base > 0) {
             const a = m.gPl(afterP), b = m.gPl(beforeP);
-            if (!seenPl[m.key] && b <= bl.pl[e.playerId][m.key] && a > bl.pl[e.playerId][m.key]) { seenPl[m.key] = true; badges.push(recBadge('personal', false, m.abb, a)); }
-          }
-          const otherG = teamPlayerMax(teamPlBase, m.key);
-          if (otherG !== null) {
-            const a = m.gPl(afterP), b = m.gPl(beforeP);
-            if (!seenTp[m.key] && b <= otherG && a > otherG) { seenTp[m.key] = true; badges.push(recBadge('tplayer', false, m.abb, a)); }
+            if (!seenPl[m.key] && b <= base && a > base) { seenPl[m.key] = true; badges.push(recBadge('personal', false, m.abb, a)); }
           }
         }
         if (m.qPl) {
-          if (bl.plq[e.playerId] && (m.key in bl.plq[e.playerId])) {
+          const baseQ = bl.plq[e.playerId] ? bl.plq[e.playerId][m.key] : undefined;
+          if (baseQ > 0) {
             const a = m.qPl(afterQ), b = m.qPl(beforeQ);
-            if (!seenPlq[m.key] && b <= bl.plq[e.playerId][m.key] && a > bl.plq[e.playerId][m.key]) { seenPlq[m.key] = true; badges.push(recBadge('personal', true, m.abb, a)); }
-          }
-          const otherQ = teamPlayerMax(teamPlQBase, m.key);
-          if (otherQ !== null) {
-            const a = m.qPl(afterQ), b = m.qPl(beforeQ);
-            if (!seenTpq[m.key] && b <= otherQ && a > otherQ) { seenTpq[m.key] = true; badges.push(recBadge('tplayer', true, m.abb, a)); }
+            if (!seenPlq[m.key] && b <= baseQ && a > baseQ) { seenPlq[m.key] = true; badges.push(recBadge('personal', true, m.abb, a)); }
           }
         }
-        if (m.gTe && (m.key in teamBase)) {
+        if (m.gTe && teamBase[m.key] > 0) {
           const a = m.gTe(teamCur, rival), b = m.gTe(beforeT, beforeR);
           if (!seenTe[m.key] && b <= teamBase[m.key] && a > teamBase[m.key]) { seenTe[m.key] = true; badges.push(recBadge('team', false, m.abb, a)); }
         }
-        if (m.qTe && (m.key in teamQBase)) {
+        if (m.qTe && teamQBase[m.key] > 0) {
           const a = m.qTe(afterQT), b = m.qTe(beforeQT);
           if (!seenTeq[m.key] && b <= teamQBase[m.key] && a > teamQBase[m.key]) { seenTeq[m.key] = true; badges.push(recBadge('team', true, m.abb, a)); }
         }
@@ -1630,11 +1611,11 @@ async function computeLiveRecordFlags() {
       const afterQT = qTeamView(qTeams[period]);
       const beforeT = teamCur;
       RECORD_METRICS.forEach(m => {
-        if (m.gTe && (m.key in teamBase)) {
+        if (m.gTe && teamBase[m.key] > 0) {
           const a = m.gTe(teamCur, rival), b = m.gTe(beforeT, beforeR);
           if (!seenTe[m.key] && b <= teamBase[m.key] && a > teamBase[m.key]) { seenTe[m.key] = true; badges.push(recBadge('team', false, m.abb, a)); }
         }
-        if (m.qTe && (m.key in teamQBase)) {
+        if (m.qTe && teamQBase[m.key] > 0) {
           const a = m.qTe(afterQT), b = m.qTe(beforeQT);
           if (!seenTeq[m.key] && b <= teamQBase[m.key] && a > teamQBase[m.key]) { seenTeq[m.key] = true; badges.push(recBadge('team', true, m.abb, a)); }
         }
@@ -1797,13 +1778,119 @@ async function saveCurrentSession() {
   await DB.put('games', activeGame);
 }
 
-async function endGame() {
-  if (!confirm('Finalitzar el partit?')) return;
-  await saveCurrentSession();
-  if (activeGame) {
-    activeGame.isActive = false;
-    await DB.put('games', activeGame);
+function startingLineupForReview(game, log) {
+  if (Array.isArray(game.startingPlayerIds) && game.startingPlayerIds.length) {
+    return game.startingPlayerIds.slice();
   }
+  let court = Array.isArray(game.onCourtPlayerIds) && game.onCourtPlayerIds.length
+    ? game.onCourtPlayerIds.slice()
+    : (game.playerIds || []).slice(0, 5);
+  for (let i = log.length - 1; i >= 0; i--) {
+    const a = log[i];
+    if (a.type !== 'sub') continue;
+    if (a.inId != null) {
+      const idx = court.indexOf(a.inId);
+      if (idx >= 0) court.splice(idx, 1);
+    }
+    if (a.outId != null && !court.includes(a.outId)) court.push(a.outId);
+  }
+  return court;
+}
+
+function playedPlayerIdsForReview(game, log) {
+  const played = new Set(startingLineupForReview(game, log));
+  (game.onCourtPlayerIds || []).forEach(pid => played.add(pid));
+  log.forEach(a => {
+    if (a.type === 'sub') {
+      if (a.outId != null) played.add(a.outId);
+      if (a.inId != null) played.add(a.inId);
+      return;
+    }
+    if (a.type === 'addPlayer') return;
+    if (a.playerId !== undefined && a.playerId !== -1) played.add(a.playerId);
+  });
+  return played;
+}
+
+async function getEndGameReviewCandidates() {
+  if (!activeGame) return [];
+  const players = await DB.getAll('players');
+  const pMap = {};
+  players.forEach(p => pMap[p.id] = p);
+  const played = playedPlayerIdsForReview(activeGame, actionLog);
+  return activeGame.playerIds.map(pid => {
+    const st = activePlayerStats[pid];
+    const zero = FIELDS.every(f => !st || !st[f]);
+    if (!zero) return null;
+    const playedOnCourt = played.has(pid);
+    return {
+      playerId: pid,
+      player: pMap[pid],
+      reason: playedOnCourt ? 'Totes les estadístiques a 0' : 'No ha sortit a pista'
+    };
+  }).filter(Boolean);
+}
+
+function askEndGameRemoval(candidates) {
+  return new Promise(resolve => {
+    endGameReviewResolve = resolve;
+    const rows = candidates.map(c => `
+      <label class="d-flex align-items-start gap-2 py-2 border-bottom border-secondary">
+        <input type="checkbox" class="form-check-input mt-1 endgame-remove-player" value="${c.playerId}" checked>
+        <span><span class="fw-semibold">${esc(playerLabel(c.player))}</span><br><span class="small text-secondary">${c.reason}</span></span>
+      </label>`).join('');
+    const body = `<div class="small text-secondary mb-2">Aquests jugadors no han sortit a pista o no han registrat cap estadística. Els seleccionats no comptaran com a partit jugat:</div>${rows}`;
+    openPopup('Revisió de jugadors', body,
+      `<button class="btn btn-outline-secondary" onclick="resolveEndGameReview(false, false)">Cancel·lar</button>
+       <button class="btn btn-outline-primary" onclick="resolveEndGameReview(true, false)">Finalitzar sense treure</button>
+       <button class="btn btn-danger" onclick="resolveEndGameReview(true, true)">Treure i finalitzar</button>`);
+  });
+}
+
+function resolveEndGameReview(proceed, remove) {
+  const resolve = endGameReviewResolve;
+  if (!resolve) return;
+  endGameReviewResolve = null;
+  const removeIds = (proceed && remove)
+    ? Array.from(document.querySelectorAll('.endgame-remove-player:checked'))
+      .map(cb => parseInt(cb.value, 10))
+      .filter(id => !isNaN(id))
+    : [];
+  closePopup();
+  resolve({ proceed, removeIds });
+}
+
+async function endGame() {
+  if (!activeGame) return;
+  if (!confirm('Finalitzar el partit?')) return;
+
+  const candidates = await getEndGameReviewCandidates();
+  let removeIds = [];
+  if (candidates.length) {
+    const review = await askEndGameRemoval(candidates);
+    if (!review.proceed) return;
+    removeIds = review.removeIds;
+  }
+
+  if (removeIds.length) {
+    const removeSet = new Set(removeIds);
+    const existing = await DB.getByIndex('stats', 'gameId', activeGame.id);
+    for (const row of existing) {
+      if (removeSet.has(row.playerId)) await DB.delete('stats', row.id);
+    }
+    activeGame.playerIds = (activeGame.playerIds || []).filter(pid => !removeSet.has(pid));
+    if (Array.isArray(activeGame.onCourtPlayerIds)) {
+      activeGame.onCourtPlayerIds = activeGame.onCourtPlayerIds.filter(pid => !removeSet.has(pid));
+    }
+    if (Array.isArray(activeGame.startingPlayerIds)) {
+      activeGame.startingPlayerIds = activeGame.startingPlayerIds.filter(pid => !removeSet.has(pid));
+    }
+    removeIds.forEach(pid => delete activePlayerStats[pid]);
+  }
+
+  await saveCurrentSession();
+  activeGame.isActive = false;
+  await DB.put('games', activeGame);
   activeGame = null;
   activePlayerStats = {};
   actionLog = [];
@@ -2007,9 +2094,12 @@ async function handleGamesImport(event) {
     }
 
     for (const g of newGames) {
-      const { id, playerIds, teamId, actions, ...rest } = g;
+      const { id, playerIds, teamId, actions, startingPlayerIds, ...rest } = g;
       const newPlayerIds = (playerIds || []).map(pid => playerIdMap[pid]).filter(pid => pid !== undefined);
       const newTeamId = teamId ? (teamIdMap[teamId] || null) : null;
+      const newStartingPlayerIds = Array.isArray(startingPlayerIds)
+        ? startingPlayerIds.map(pid => playerIdMap[pid]).filter(pid => pid !== undefined)
+        : null;
       let newActions = actions;
       if (Array.isArray(actions)) {
         newActions = actions.map(a => {
@@ -2020,7 +2110,9 @@ async function handleGamesImport(event) {
           return na;
         });
       }
-      const newGameId = await DB.add('games', { ...rest, playerIds: newPlayerIds, teamId: newTeamId, actions: newActions });
+      const importedGame = { ...rest, playerIds: newPlayerIds, teamId: newTeamId, actions: newActions };
+      if (newStartingPlayerIds) importedGame.startingPlayerIds = newStartingPlayerIds;
+      const newGameId = await DB.add('games', importedGame);
       for (const s of (data.stats || [])) {
         if (s.gameId !== g.id) continue;
         if (playerIdMap[s.playerId] === undefined) continue;
